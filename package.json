@@ -14,7 +14,9 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsup src/index.ts src/snippet.ts --format esm --dts --out-dir dist && tsup src/snippet.ts --format iife --global-name UntitledAnalytics --out-dir dist",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "example": "pnpm build && node examples/server.mjs",
+    "test:example": "pnpm build && node --test examples/smoke.mjs"
   },
   "devDependencies": {
     "tsup": "^8.5.0",
