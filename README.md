@@ -22,3 +22,11 @@ strings and fragments are omitted, while selected UTM fields are sanitized.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet, chain, or persistent anonymous identity code.
+
+## Local example and smoke check
+
+`pnpm example` builds the browser bundle and serves a self-contained example at
+`http://localhost:4317`. Its local collector records page and button events at
+`/captured`. `pnpm test:example` exercises the built ESM package and browser
+snippet against a local collector, including URL sanitization and browser
+storage checks. No Formono or cloud services are needed.
