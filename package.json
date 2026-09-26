@@ -1,0 +1,25 @@
+{
+  "name": "@untitled-analytics/web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cookieless web analytics SDK derived from the Formo event contract",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./snippet": "./dist/snippet.global.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts src/snippet.ts --format esm --dts --out-dir dist && tsup src/snippet.ts --format iife --global-name UntitledAnalytics --out-dir dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.0"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "license": "MIT"
+}
