@@ -89,3 +89,24 @@ test('route changes create new pageviews and failed batches retry in memory', as
     assert.equal(sent[2].events[0].context.page.url, 'https://example.com/docs');
   } finally { sdk.destroy(); globalThis.fetch = originalFetch; }
 });
+
+test('identify sends a stable user ID and custom traits without browser storage', async () => {
+  browser('https://example.com/app');
+  const sent = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { sent.push({ url, body: JSON.parse(init.body) }); return { ok: true, status: 200 }; };
+  const sdk = new Analytics({ writeKey: 'ua_example', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+  try {
+    await sdk.identify('user_123', { email: 'person@example.com', plan: 'pro', score: 7 });
+    sdk.track('signed_in');
+    await sdk.flush();
+    assert.equal(sent[0].url, 'https://collector.example/v1/identify');
+    assert.equal(sent[0].body.user_id, 'user_123');
+    assert.equal(sent[0].body.traits.email, 'person@example.com');
+    assert.equal(sent[1].body.events[0].user_id, 'user_123');
+    sdk.clearUserId();
+    sdk.track('signed_out');
+    await sdk.flush();
+    assert.equal(sent[2].body.events[0].user_id, undefined);
+  } finally { sdk.destroy(); globalThis.fetch = originalFetch; }
+});

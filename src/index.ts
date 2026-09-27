@@ -15,6 +15,7 @@ export class Analytics {
   private readonly landingUrl = typeof location !== 'undefined' ? location.href : '';
   private vitalNavigationType?: string;
   private vitalsReported = false;
+  private userId?: string;
   private readonly onPageHide = () => { this.reportWebVitals(); void this.flush(true); };
   private readonly onVisibilityChange = () => {
     if (document.visibilityState === 'hidden') { this.reportWebVitals(); void this.flush(true); }
@@ -56,6 +57,22 @@ export class Analytics {
     this.enqueue('track', event, properties);
   }
 
+  /** Explicit, in-memory identity. Call again after each authenticated page load. */
+  async identify(userId: string, traits: Record<string, string | number | boolean | null> = {}): Promise<void> {
+    if (!userId || userId.length > 255) throw new Error('User ID must be 1–255 characters');
+    if (JSON.stringify(traits).length > 2048) throw new Error('User traits must be under 2KB');
+    this.userId = userId;
+    if (typeof window === 'undefined' || this.options.disabled) return;
+    const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v1/identify', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-write-key': this.options.writeKey },
+      body: JSON.stringify({ user_id: userId, traits, page_url: `${location.origin}${location.pathname}` }), credentials: 'omit',
+    });
+    if (!response.ok) throw new Error(`Analytics identification failed: ${response.status}`);
+  }
+
+  clearUserId(): void { this.userId = undefined; }
+  getUserId(): string | undefined { return this.userId; }
+
   private startWebVitals(): void {
     const module = this.options.webVitals;
     if (!module) return;
@@ -95,6 +112,7 @@ export class Analytics {
       original_timestamp: originalTimestamp,
       context: context ?? pageContext(),
       properties,
+      ...(this.userId ? { user_id: this.userId } : {}),
     };
     this.pending.push(payload);
     if (this.pending.length >= this.options.batchSize) void this.flush();

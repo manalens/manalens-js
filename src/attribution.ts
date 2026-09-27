@@ -1,5 +1,6 @@
 // Adapted from getformo/sdk's EventFactory and traffic-source sanitizer.
 const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content'] as const;
+const CLICK_IDS = [['gclid', 'google'], ['gbraid', 'google'], ['wbraid', 'google'], ['fbclid', 'meta'], ['msclkid', 'microsoft'], ['ttclid', 'tiktok'], ['li_fat_id', 'linkedin']] as const;
 const FORBIDDEN = /[<>"'`\\\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\ufeff\ufffd]/;
 
 function safeUtm(value: string | null): string | undefined {
@@ -17,6 +18,8 @@ export function pageContext(pageUrl = location.href) {
     const value = safeUtm(url.searchParams.get(key));
     if (value) campaign[key] = value;
   }
+  const referral = safeUtm(url.searchParams.get('ref') || url.searchParams.get('referral') || url.searchParams.get('referral_code'));
+  const paidClick = CLICK_IDS.map(([key, source]) => ({ source, value: safeUtm(url.searchParams.get(key)) })).find(item => item.value);
   let referrer = '';
   if (document.referrer) {
     try {
@@ -28,6 +31,8 @@ export function pageContext(pageUrl = location.href) {
     page: { path, title: document.title.slice(0, 300), url: `${url.origin}${path}` },
     referrer,
     ...campaign,
+    ...(referral ? { ref: referral } : {}),
+    ...(paidClick ? { paid_source: paidClick.source, click_id: paidClick.value } : {}),
     locale: navigator.language?.slice(0, 32),
   };
 }

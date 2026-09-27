@@ -4,6 +4,10 @@ The browser SDK preserves the generic Formo event envelope while sending no
 cookies, localStorage IDs, sessionStorage IDs, or cross-day anonymous IDs. The
 ingestion server assigns a site-scoped daily rotating `session_id`.
 
+That inherited server field is currently a daily anonymous ID. A distinct
+inactivity-bounded session ID is planned; the SDK never persists the anonymous
+ID in the browser.
+
 ```ts
 import { createAnalytics } from '@untitled-analytics/web';
 
@@ -13,6 +17,43 @@ const analytics = createAnalytics({
 });
 analytics.track('signup_completed', { plan: 'starter' });
 ```
+
+## Identify logged-in users
+
+Call `identify()` after login and on each authenticated page load. Use a stable
+ID from your app; email is an optional profile property, not the identity key.
+Identity lives in SDK memory only. Call `clearUserId()` on logout. The API stores
+the custom properties in a project-scoped profile, and subsequent events carry
+`user_id`. Previously anonymous events are not retroactively merged.
+
+```ts
+await analytics.identify('user_123', { email: 'person@example.com', plan: 'pro' });
+analytics.track('subscription_started');
+// On logout:
+analytics.clearUserId();
+```
+
+## Optional session replay
+
+Replay is a separate import so ordinary analytics installs do not load rrweb.
+It creates an in-memory recording ID, batches rrweb events to `/v1/replay`, and
+masks every input value. Add `data-private` to whole sections that should be
+blocked and `data-mask` to text that should be hidden. Call the returned stop
+function when recording should end. Recordings appear on visitor profiles.
+
+```ts
+import { startSessionReplay } from '@untitled-analytics/web/replay';
+
+const stopReplay = startSessionReplay({
+  writeKey: 'site_public_key',
+  endpoint: 'https://api.example.com',
+  getUserId: () => analytics.getUserId(),
+});
+```
+
+For script tags, load `/sdk-replay.js` separately and call
+`UntitledAnalyticsReplay.startSessionReplay({ writeKey, endpoint,
+getUserId: () => window.untitledAnalytics?.getUserId() })`.
 
 `page()` tracks the current page. By default the SDK also sends an initial
 pageview and listens for `popstate`. For routers that do not emit
