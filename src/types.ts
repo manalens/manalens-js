@@ -1,4 +1,4 @@
-/** The browser portion of Formo's event envelope. Identity is server-derived. */
+/** The browser portion of Formo's event envelope. Anonymous identity is server-derived. */
 export interface AnalyticsEvent {
   type: 'page' | 'track' | 'web_vitals';
   event?: string;
@@ -14,9 +14,13 @@ export interface AnalyticsEvent {
     utm_campaign?: string;
     utm_term?: string;
     utm_content?: string;
+    ref?: string;
+    paid_source?: string;
+    click_id?: string;
     locale?: string;
   };
   properties: Record<string, string | number | boolean | null>;
+  user_id?: string;
 }
 
 export interface AnalyticsOptions {
