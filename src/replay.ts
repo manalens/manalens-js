@@ -1,6 +1,26 @@
 import { record } from '@rrweb/record';
 import type { eventWithTime } from '@rrweb/types';
 
+const urlFields = new Set(['href', 'src', 'action', 'poster', 'url']);
+const textFields = new Set(['aria-label', 'alt', 'placeholder', 'title', 'content', 'value']);
+
+function redactReplayField(key: string, value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const field = key.toLowerCase();
+  if (field.startsWith('data-') || textFields.has(field) || field === 'srcset') return '';
+  const cleanUrl = (raw: string) => {
+    try {
+      const url = new URL(raw, location.href);
+      if (!['http:', 'https:'].includes(url.protocol)) return '';
+      url.search = '';
+      url.hash = '';
+      return /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? url.toString() : url.pathname;
+    } catch { return ''; }
+  };
+  if (urlFields.has(field)) return cleanUrl(value);
+  return value.replace(/https?:\/\/[^\s"'<>)]*/gi, match => cleanUrl(match));
+}
+
 export interface ReplayOptions {
   writeKey: string;
   endpoint: string;
@@ -41,7 +61,7 @@ export function startSessionReplay(options: ReplayOptions): () => void {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-write-key': options.writeKey },
         body: JSON.stringify({ recording_id: recordingId, sequence: current, page_url: `${location.origin}${location.pathname}`, events,
-          ...(options.getUserId?.() ? { user_id: options.getUserId?.() } : {}) }),
+          ...(options.getUserId?.() ? { user_id: options.getUserId?.() } : {}) }, redactReplayField),
         credentials: 'omit', keepalive,
       });
       if (response.status === 403) { pause(); return; }

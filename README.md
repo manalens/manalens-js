@@ -39,7 +39,8 @@ Replay is a separate import so ordinary analytics installs do not load rrweb.
 The recorder first checks `/v1/replay/config` and records only when replay is
 enabled for the project. It rechecks every 30 seconds and stops if the setting
 is disabled or unavailable. It creates an in-memory recording ID, batches
-rrweb events to `/v1/replay`, and masks text and input values by default. Add
+rrweb events to `/v1/replay`, masks text and input values, and removes URL query
+strings and fragments by default. Add
 `data-private` to block whole sections. Call the returned stop function when
 recording should end. Recordings appear on visitor profiles.
 
