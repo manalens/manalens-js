@@ -36,10 +36,12 @@ analytics.clearUserId();
 ## Optional session replay
 
 Replay is a separate import so ordinary analytics installs do not load rrweb.
-It creates an in-memory recording ID, batches rrweb events to `/v1/replay`, and
-masks every input value. Add `data-private` to whole sections that should be
-blocked and `data-mask` to text that should be hidden. Call the returned stop
-function when recording should end. Recordings appear on visitor profiles.
+The recorder first checks `/v1/replay/config` and records only when replay is
+enabled for the project. It rechecks every 30 seconds and stops if the setting
+is disabled or unavailable. It creates an in-memory recording ID, batches
+rrweb events to `/v1/replay`, and masks text and input values by default. Add
+`data-private` to block whole sections. Call the returned stop function when
+recording should end. Recordings appear on visitor profiles.
 
 ```ts
 import { startSessionReplay } from '@untitled-analytics/web/replay';
