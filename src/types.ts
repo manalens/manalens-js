@@ -1,6 +1,6 @@
 /** The browser portion of Formo's event envelope. Identity is server-derived. */
 export interface AnalyticsEvent {
-  type: 'page' | 'track';
+  type: 'page' | 'track' | 'web_vitals';
   event?: string;
   message_id: string;
   channel: 'web';
@@ -28,4 +28,22 @@ export interface AnalyticsOptions {
   flushIntervalMs?: number;
   /** Suppress events, including queued events, when true. */
   disabled?: boolean;
+  /** Optional web-vitals v5+ module. No performance code is loaded when omitted. */
+  webVitals?: WebVitalsModule;
+}
+
+export interface WebVitalMetric {
+  name: 'LCP' | 'INP' | 'CLS' | 'FCP' | 'TTFB';
+  value: number;
+  navigationType?: string;
+}
+
+export type WebVitalCallback = (metric: WebVitalMetric) => void;
+export type WebVitalRegistrar = (callback: WebVitalCallback, options?: { reportAllChanges?: boolean }) => void;
+export interface WebVitalsModule {
+  onLCP?: WebVitalRegistrar;
+  onINP?: WebVitalRegistrar;
+  onCLS?: WebVitalRegistrar;
+  onFCP?: WebVitalRegistrar;
+  onTTFB?: WebVitalRegistrar;
 }

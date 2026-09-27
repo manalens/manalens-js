@@ -7,8 +7,8 @@ function safeUtm(value: string | null): string | undefined {
   return value;
 }
 
-export function pageContext() {
-  const url = new URL(location.href);
+export function pageContext(pageUrl = location.href) {
+  const url = new URL(pageUrl);
   const path = url.pathname !== '/' ? url.pathname.replace(/\/+$/, '') : '/';
   // Only explicitly selected campaign parameters leave the browser. Full query
   // strings and fragments often contain emails, tokens, and other private data.

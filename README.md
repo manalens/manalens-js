@@ -20,6 +20,24 @@ pageview and listens for `popstate`. For routers that do not emit
 pending events and listeners. The SDK sends only URL origin and path; query
 strings and fragments are omitted, while selected UTM fields are sanitized.
 
+## Optional Web Vitals
+
+Pass `web-vitals` 5 or later to collect LCP, INP, CLS, FCP and TTFB. The SDK
+does not bundle the library or load it unless you supply it. One
+`web_vitals` event is queued on the first page hide, with the measured landing
+page, navigation-start timestamp, and only the metrics the browser reported.
+No analytics cookie or browser-stored visitor ID is added.
+
+```ts
+import * as webVitals from 'web-vitals';
+import { createAnalytics } from '@untitled-analytics/web';
+
+createAnalytics({ writeKey: 'site_public_key', endpoint: 'https://api.example.com', webVitals });
+```
+
+The `web-vitals` package is an application dependency when this option is used.
+This first port measures hard page loads, not separate SPA route changes.
+
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet, chain, or persistent anonymous identity code.
 
