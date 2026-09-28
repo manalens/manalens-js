@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit",
     "example": "pnpm build && node examples/server.mjs",
     "test:example": "pnpm build && node --test examples/smoke.mjs",
-    "prepare": "npm run build"
+    "prepare": "pnpm build",
+    "test": "pnpm test:example"
   },
   "devDependencies": {
     "tsup": "^8.5.0",
