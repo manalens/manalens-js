@@ -1,7 +1,7 @@
 # Untitled Analytics Web SDK
 
 The browser SDK preserves the generic Formo event envelope while sending no
-cookies, localStorage IDs, sessionStorage IDs, or cross-day anonymous IDs. The
+cookies. Daily mode uses no localStorage IDs, sessionStorage IDs, or cross-day anonymous IDs. The
 ingestion server assigns a site-scoped daily rotating `session_id`.
 
 That inherited server field is currently a daily anonymous ID. A distinct
@@ -92,3 +92,46 @@ include wallet, chain, or persistent anonymous identity code.
 `/captured`. `pnpm test:example` exercises the built ESM package and browser
 snippet against a local collector, including URL sanitization and browser
 storage checks. No Formono or cloud services are needed.
+
+## Ad and campaign attribution
+
+Automatically captures the five standard UTM fields plus `utm_id`,
+`utm_source_platform`, `utm_creative_format`, `utm_marketing_tactic`; external
+referrer origins; `ref` / `referral` / `referral_code`; Google `gclid`, `gbraid`,
+`wbraid`, `gad_source`; Meta `fbclid`; Microsoft `msclkid`; TikTok `ttclid`;
+X `twclid`; LinkedIn `li_fat_id`; Reddit `rdt_cid`; Snapchat `ScCid`. All
+network IDs are preserved. `gad_source` marks the source but is not a click ID.
+Derived `paid_source` and a deterministic `click_id` remain compatible with
+Formo-style event context. Paid UTMs classify as `paid_utm` without a network ID.
+
+A coherent campaign is carried **in memory** across SPA routes and subsequent
+track/identify calls, replaced when a new tagged acquisition arrives, and
+cleared at UTC midnight. Reloading or creating another instance clears it.
+Daily mode reads/writes no cookies or browser identity storage. Optional Attribution mode stores a consent-gated first-party UUID in localStorage. Page URLs omit query/fragment,
+and only bounded, sanitized allowlisted campaign parameters are sent.
+
+Conversion-credit models run in Analytics' Tinybird backend, not in the SDK.
+Anonymous journeys cannot join days; explicit `identify(userId, traits)` permits
+known-user joins. The backend supports first/last, last non-direct, linear,
+position-based and time decay; it does not capture impressions or ad spend.
+
+## Optional Attribution mode
+
+Daily mode is the default. Enable Attribution mode in project settings first (admin/MFA and processing acknowledgement), then supply a visitor-consent callback:
+
+```ts
+const analytics = createAnalytics({
+  writeKey: 'YOUR_SDK_WRITE_KEY',
+  endpoint: 'https://api.your-domain.com',
+  attribution: { consent: () => consentManager.analyticsAllowed() },
+});
+await analytics.ready;
+await analytics.identify('user_123', { stripe_customer_id: 'cus_123' });
+// or paddle_customer_id: 'ctm_123'
+```
+
+The callback comes from your app's consent manager. Only with both gates satisfied does the SDK access a project-scoped localStorage UUID, expiring after 90 days. Storage failure falls back to daily identity. No analytics cookies are set. Explicit user_id remains in memory and must be set again after authenticated reloads.
+
+On withdrawal, call `analytics.setConsent(false)` immediately; stored identity and persistent fields on queued events are removed. Alternatively the callback is rechecked on sends. `setConsent` explicitly overrides the callback until changed again, so use one mechanism consistently. Call `clearUserId()` on logout: it discards queued events and replaces the consented browser ID to prevent reattaching the next account. Consent withdrawal does not delete previously stored analytics history.
+
+Browser snippets can use `data-attribution="true"` together with `window.untitledAnalyticsConsent = () => ...`; omit both for daily mode. The collector ignores client anonymous_id unless the project allows it and consent is true. Never send private provider/webhook secrets to the browser.
