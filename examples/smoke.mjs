@@ -180,3 +180,72 @@ test('replay config network failure does not upload any recordings', async t => 
   const stop = startSessionReplay({ writeKey: 'key', endpoint: 'https://collector.example' });
   await new Promise(resolve => setImmediate(resolve)); stop(); assert.equal(calls, 1);
 });
+
+for (const [key, network] of [['gclid','google'],['gbraid','google'],['wbraid','google'],['fbclid','meta'],['msclkid','microsoft'],['ttclid','tiktok'],['twclid','twitter'],['li_fat_id','linkedin'],['rdt_cid','reddit'],['ScCid','snapchat']]) test(`captures ${key} and carries it across route changes without storage`, async t => {
+  const {window}=browser(`https://example.com/?${key}=ad-token&utm_source=${network}&utm_campaign=launch`); const sent=[];
+  t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  try { globalThis.location=new URL('https://example.com/checkout?email=private');window.dispatchEvent(new Event('popstate'));sdk.track('purchase',{revenue:120});await sdk.identify('customer');await sdk.flush();
+    const events=sent.flatMap(x=>x.events||[]); assert.equal(events.length,3);
+    for(const event of events){assert.equal(event.context[key],'ad-token');assert.equal(event.context.click_id,'ad-token');assert.equal(event.context.paid_source,network);assert.equal(event.context.utm_campaign,'launch');assert.ok(!JSON.stringify(event.context).includes('private'));}
+    assert.equal(sent.find(x=>x.user_id)?.context[key],'ad-token');
+  } finally{sdk.destroy();}
+});
+test('preserves multiple network IDs and replaces an entire campaign on a new touch',async t=>{
+  const {window}=browser('https://example.com/?gclid=g&fbclid=f&utm_source=google&utm_term=old&utm_id=c1&utm_source_platform=google');const sent=[];
+  t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  try{globalThis.location=new URL('https://example.com/new?utm_source=newsletter&utm_medium=email');window.dispatchEvent(new Event('popstate'));await sdk.flush();const [first,last]=sent[0].events;assert.equal(first.context.gclid,'g');assert.equal(first.context.fbclid,'f');assert.equal(first.context.click_id,'g');assert.equal(first.context.utm_id,'c1');assert.equal(last.context.utm_source,'newsletter');assert.equal(last.context.gclid,undefined);assert.equal(last.context.utm_term,undefined);assert.equal(last.context.paid_source,undefined);}finally{sdk.destroy();}
+});
+test('gad_source marks Google traffic but is never a click token; paid UTMs and referral aliases work',async t=>{
+  browser('https://example.com/?gad_source=1&referral_code=partner&utm_creative_format=video&utm_marketing_tactic=retargeting');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});let sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.paid_source,'google');assert.equal(c.click_id,undefined);assert.equal(c.gad_source,'1');assert.equal(c.ref,'partner');assert.equal(c.utm_creative_format,'video');}finally{sdk.destroy();}
+  browser('https://example.com/?utm_medium=paid_social');sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();assert.equal(sent[1].events[0].context.paid_source,'paid_utm');}finally{sdk.destroy();}
+});
+test('campaign values reject unsafe and oversized input and arbitrary queries',async t=>{
+  browser('https://example.com/?gclid=%3Cscript%3E&utm_term='+ 'x'.repeat(256)+'&email=private&token=secret');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.gclid,undefined);assert.equal(c.utm_term,undefined);assert.ok(!JSON.stringify(c).includes('secret'));assert.ok(!JSON.stringify(c).includes('private'));}finally{sdk.destroy();}
+});
+test('UTC midnight drops carried campaign context',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-20T23:59:59Z').getTime()});const {window}=browser('https://example.com/?gclid=g&utm_source=google');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{t.mock.timers.tick(2000);globalThis.location=new URL('https://example.com/next');window.dispatchEvent(new Event('popstate'));await sdk.flush();assert.equal(sent[0].events[0].context.gclid,'g');assert.equal(sent[0].events[1].context.gclid,undefined);}finally{sdk.destroy();}
+});
+
+function identityStorage(window, stored = new Map()) {
+  const calls = [];
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+    getItem(key) { calls.push('read'); return stored.get(key) || null; },
+    setItem(key, value) { calls.push('write'); stored.set(key,value); },
+    removeItem(key) { calls.push('remove'); stored.delete(key); },
+  } });
+  return { stored, calls };
+}
+for (const [consent,project] of [[false,true],[true,false]]) test(`persistent storage requires consent=${consent} and project=${project}`,async t=>{
+  const {window}=browser('https://example.com/');const storage=identityStorage(window),sent=[];
+  t.mock.method(globalThis,'fetch',async(url,init)=>url.endsWith('/config')?{ok:true,json:async()=>({attribution_enabled:project})}:(sent.push(JSON.parse(init.body)),{ok:true}));
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',attribution:{consent:()=>consent},flushIntervalMs:60000});
+  try{await sdk.ready;await sdk.flush();assert.equal(storage.calls.length,0);assert.equal(sent[0].events[0].anonymous_id,undefined);}finally{sdk.destroy();}
+});
+test('consented browser identity survives reload, is key scoped, and expires',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-01').getTime()});const stored=new Map(),sent=[];
+  t.mock.method(globalThis,'fetch',async(url,init)=>url.endsWith('/config')?{ok:true,json:async()=>({attribution_enabled:true})}:(sent.push(JSON.parse(init.body)),{ok:true}));
+  const make=async(key='key')=>{const {window}=browser('https://example.com/');identityStorage(window,stored);const sdk=new Analytics({writeKey:key,endpoint:'https://collector.example',attribution:{consent:()=>true},flushIntervalMs:60000});await sdk.ready;await sdk.flush();return sdk;};
+  let sdk=await make();const first=sent.at(-1).events[0].anonymous_id;assert.match(first,/^[a-f0-9-]{36}$/);sdk.destroy();
+  sdk=await make();assert.equal(sent.at(-1).events[0].anonymous_id,first);sdk.destroy();sdk=await make('other');assert.notEqual(sent.at(-1).events[0].anonymous_id,first);sdk.destroy();
+  t.mock.timers.tick(91*86400000);sdk=await make();assert.notEqual(sent.at(-1).events[0].anonymous_id,first);sdk.destroy();
+});
+test('consent revocation removes storage and queued identity, without silently restoring it',async t=>{
+  const {window}=browser('https://example.com/');const storage=identityStorage(window),sent=[];let consent=true;
+  t.mock.method(globalThis,'fetch',async(url,init)=>url.endsWith('/config')?{ok:true,json:async()=>({attribution_enabled:true})}:(sent.push(JSON.parse(init.body)),{ok:true}));
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',attribution:{consent:()=>consent},flushIntervalMs:60000});
+  try{await sdk.ready;sdk.track('signup');consent=false;await sdk.flush();assert.equal(storage.stored.size,0);assert.ok(sent[0].events.every(event=>!event.anonymous_id));assert.ok(sent[0].events.every(event=>event.attribution_consent===undefined));sdk.track('next');await sdk.flush();assert.equal(sent[1].events[0].anonymous_id,undefined);}finally{sdk.destroy();}
+});
+test('explicit identify carries consented anonymous ID and logout rotates it',async t=>{
+  const {window}=browser('https://example.com/');identityStorage(window);const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,init)=>url.endsWith('/config')?{ok:true,json:async()=>({attribution_enabled:true})}:(sent.push({url,body:JSON.parse(init.body)}),{ok:true}));
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',attribution:{consent:()=>true},flushIntervalMs:60000});
+  try{await sdk.ready;await sdk.identify('alice',{email:'alice@acme.com'});const first=sent.find(x=>x.url.endsWith('/identify')).body;assert.ok(first.anonymous_id);assert.equal(first.attribution_consent,true);sdk.clearUserId();await sdk.setConsent(true);sdk.track('after_logout');await sdk.flush();const after=sent.at(-1).body.events[0];assert.notEqual(after.anonymous_id,first.anonymous_id);assert.equal(after.user_id,undefined);}finally{sdk.destroy();}
+});
+test('blocked storage falls back to daily identity without breaking collection',async t=>{
+  const {window}=browser('https://example.com/');Object.defineProperty(window,'localStorage',{get(){throw Error('blocked');}});const sent=[];
+  t.mock.method(globalThis,'fetch',async(url,init)=>url.endsWith('/config')?{ok:true,json:async()=>({attribution_enabled:true})}:(sent.push(JSON.parse(init.body)),{ok:true}));
+  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',attribution:{consent:()=>true},flushIntervalMs:60000});try{await sdk.ready;await sdk.flush();assert.equal(sent[0].events[0].anonymous_id,undefined);}finally{sdk.destroy();}
+});
