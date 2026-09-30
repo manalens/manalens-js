@@ -30,6 +30,14 @@ export interface ReplayOptions {
   maskTextSelector?: string;
 }
 
+/** Stable per recording, so SDK and collector enforce the same project sample. */
+export function replayIncluded(recordingId: string, rate: number): boolean {
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(recordingId) || !Number.isFinite(rate) || rate < 0 || rate > 1) return false;
+  if (rate === 0) return false;
+  if (rate === 1) return true;
+  return parseInt(recordingId.slice(0, 8), 16) / 0x1_0000_0000 < rate;
+}
+
 /** Opt-in recorder. It uses no cookies or persistent browser identity. */
 export function startSessionReplay(options: ReplayOptions): () => void {
   if (typeof window === 'undefined') return () => {};
@@ -102,8 +110,8 @@ export function startSessionReplay(options: ReplayOptions): () => void {
         headers: { 'x-write-key': options.writeKey }, credentials: 'omit', cache: 'no-store',
       });
       if (!response.ok) { pause(); return; }
-      const config = await response.json() as { enabled?: boolean };
-      if (config.enabled) begin(); else pause();
+      const config = await response.json() as { enabled?: boolean; sample_rate?: number };
+      if (config.enabled && replayIncluded(recordingId, config.sample_rate ?? 1)) begin(); else pause();
     } catch { pause(); }
   }
 
