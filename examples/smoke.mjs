@@ -6,6 +6,17 @@ import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { Analytics } from '../dist/index.js';
 
+test('replay sampling is stable and shares boundary behavior with the collector', async () => {
+  const { replayIncluded } = await import('../dist/replay.js');
+  const low = '00000000-0000-4000-8000-000000000000';
+  const high = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+  assert.equal(replayIncluded(low, 0), false);
+  assert.equal(replayIncluded(low, 0.1), true);
+  assert.equal(replayIncluded(high, 0.5), false);
+  assert.equal(replayIncluded(high, 1), true);
+  assert.equal(replayIncluded('invalid', 1), false);
+});
+
 function browser(url = 'https://example.com/pricing?email=private%40example.com&utm_source=Newsletter#secret') {
   const window = new EventTarget();
   const document = { title: 'Pricing', referrer: 'https://google.com/search?q=private' };
