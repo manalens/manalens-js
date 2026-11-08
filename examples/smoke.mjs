@@ -215,20 +215,14 @@ test('network retries retain message identity and queued events', async t => {
   finally { sdk.destroy(); }
 });
 
-test('pagehide Web Vitals report is sparse, rounded and sent once with landing path', async t => {
-  const { window } = browser('https://example.com/landing?email=private'); const callbacks = {}; const sent = [];
-  const module = Object.fromEntries(['LCP','INP','CLS','FCP','TTFB'].map(name => [`on${name}`, callback => { callbacks[name] = callback; }]));
+test('pagehide flushes queued events once with keepalive', async t => {
+  const { window } = browser(); const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false, webVitals: module, flushIntervalMs: 60000 });
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
   try {
-    callbacks.LCP({ name: 'LCP', value: 1200.7, navigationType: 'navigate' });
-    callbacks.CLS({ name: 'CLS', value: 0.123456 });
-    callbacks.INP({ name: 'INP', value: -1 }); callbacks.TTFB({ name: 'TTFB', value: Infinity });
-    globalThis.location = new URL('https://example.com/next'); window.dispatchEvent(new Event('pagehide')); await sdk.flush();
-    const metric = sent.flatMap(item => item.body.events).find(event => event.type === 'web_vitals');
-    assert.equal(metric.context.page.path, '/landing'); assert.equal(metric.properties.lcp, 1201); assert.equal(metric.properties.cls, 0.1235);
-    assert.equal(metric.properties.inp, undefined); assert.equal(metric.properties.ttfb, undefined); assert.equal(sent[0].init.keepalive, true);
-    window.dispatchEvent(new Event('pagehide')); await sdk.flush(); assert.equal(sent.flatMap(item => item.body.events).filter(event => event.type === 'web_vitals').length, 1);
+    sdk.track('before_leave'); window.dispatchEvent(new Event('pagehide')); await sdk.flush();
+    assert.equal(sent.length, 1); assert.equal(sent[0].init.keepalive, true);
+    assert.deepEqual(sent[0].body.events.map(event => event.event), ['before_leave']);
   } finally { sdk.destroy(); }
 });
 

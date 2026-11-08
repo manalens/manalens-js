@@ -60,7 +60,6 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `flushIntervalMs` | `5000` | Flush timer |
 | `requireConsent` | `false` | Consent mode; see below |
 | `disabled` | `false` | No events and no browser storage |
-| `webVitals` | none | `web-vitals` v5+ module |
 
 ### Methods
 
@@ -71,7 +70,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 ### Event envelope
 
 Each event in `POST /v1/events` (`{ events: [...] }`) has `type` (`page`,
-`track`, `identify` or `web_vitals`), `event` (track only), `message_id`,
+`track` or `identify`), `event` (track only), `message_id`,
 `channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
 `anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
 (identify only). In consent mode before consent, `anonymous_id`, `session_id`
@@ -149,23 +148,6 @@ pageview and listens for `popstate`. For routers that do not emit
 `popstate`, call `analytics.page()` after each route change. `destroy()` clears
 pending events and listeners. The SDK sends only URL origin and path; query
 strings and fragments are omitted, while selected UTM fields are sanitized.
-
-## Optional Web Vitals
-
-Pass `web-vitals` 5 or later to collect LCP, INP, CLS, FCP and TTFB. The SDK
-does not bundle the library or load it unless you supply it. One
-`web_vitals` event is queued on the first page hide, with the measured landing
-page, navigation-start timestamp, and only the metrics the browser reported.
-
-```ts
-import * as webVitals from 'web-vitals';
-import { createAnalytics } from '@untitled-analytics/web';
-
-createAnalytics({ writeKey: 'site_public_key', endpoint: 'https://api.example.com', webVitals });
-```
-
-The `web-vitals` package is an application dependency when this option is used.
-This first port measures hard page loads, not separate SPA route changes.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet or chain code. The anonymous ID, storage fallback and cookie
