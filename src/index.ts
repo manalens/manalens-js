@@ -20,6 +20,10 @@ export class Analytics {
   private vitalNavigationType?: string;
   private vitalsReported = false;
   private userId?: string;
+  /** Explicit setConsent() value; undefined means "use requireConsent". */
+  private consent?: boolean;
+  /** identify() made before consent, sent when consent is granted. */
+  private deferredIdentify?: Traits;
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
   private acquisition?: AnalyticsEvent['context'];
   private acquisitionDay?: string;
@@ -38,17 +42,13 @@ export class Analytics {
       flushIntervalMs: 5000,
       disabled: false,
       ...options,
-      crossSubdomainCookies: options.crossSubdomainCookies === true,
+      crossSubdomainCookies: options.crossSubdomainCookies !== false,
     };
     const key = (name: string) => storageKey(this.options.writeKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
     if (typeof window === 'undefined' || this.options.disabled) return;
-    this.optedOut = readOptOut(this.keys.optOut);
-    if (!this.optedOut) {
-      // Create the persistent ID on first load, before any event is queued.
-      generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
-      this.userId = readUserId(this.keys.userId);
-    }
+    // In consent mode, no cookie or localStorage is touched until setConsent(true).
+    if (this.identityAllowed()) this.loadIdentity();
     this.initialContext = this.captureContext();
     this.timer = setInterval(() => { void this.flush(); }, this.options.flushIntervalMs);
     this.startWebVitals();
@@ -84,15 +84,48 @@ export class Analytics {
     if (JSON.stringify(traits).length > 2048) throw new Error('User traits must be under 2KB');
     this.userId = userId;
     if (!this.active()) return;
+    if (!this.identityAllowed()) { this.deferredIdentify = traits; return; }
     writeUserId(this.keys.userId, userId, this.options.crossSubdomainCookies);
     this.enqueue('identify', undefined, {}, undefined, undefined, traits);
     await this.flush();
   }
 
+  /**
+   * Consent mode (`requireConsent: true`): `setConsent(true)` starts the
+   * persistent identity; `setConsent(false)` clears all identity storage and
+   * strips identity from queued events. Events without consent carry no
+   * anonymous_id, session_id or user_id. Also works without requireConsent.
+   */
+  setConsent(granted: boolean): void {
+    this.consent = granted;
+    if (typeof window === 'undefined' || this.options.disabled) return;
+    if (granted) {
+      this.loadIdentity();
+      const traits = this.deferredIdentify;
+      this.deferredIdentify = undefined;
+      if (traits && this.userId && this.active()) {
+        writeUserId(this.keys.userId, this.userId, this.options.crossSubdomainCookies);
+        this.enqueue('identify', undefined, {}, undefined, undefined, traits);
+      }
+      return;
+    }
+    this.clearIdentityStorage();
+    this.userId = undefined;
+    this.deferredIdentify = undefined;
+    this.pending = this.pending
+      .filter(event => event.type !== 'identify')
+      .map(({ anonymous_id: _a, session_id: _s, user_id: _u, ...event }) => event);
+  }
+
   /** Forget the user ID, anonymous ID and session. The next event starts a fresh identity. */
   reset(): void {
     this.userId = undefined;
-    if (typeof window === 'undefined' || this.options.disabled) return;
+    this.deferredIdentify = undefined;
+    if (typeof window === 'undefined' || this.options.disabled || !this.identityAllowed()) return;
+    this.clearIdentityStorage();
+  }
+
+  private clearIdentityStorage(): void {
     clearUserId(this.keys.userId);
     clearAnonymousId(this.keys.anonymousId);
     clearSessionId(this.keys.sessionId);
@@ -103,13 +136,13 @@ export class Analytics {
     this.pending = [];
     this.reset();
     this.optedOut = true;
-    if (typeof window !== 'undefined' && !this.options.disabled) writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies);
+    if (typeof window !== 'undefined' && !this.options.disabled && this.identityAllowed()) writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies);
   }
 
   /** Resume tracking after optOut(). A new anonymous ID is created. */
   optIn(): void {
     this.optedOut = false;
-    if (typeof window === 'undefined' || this.options.disabled) return;
+    if (typeof window === 'undefined' || this.options.disabled || !this.identityAllowed()) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
     generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
   }
@@ -117,7 +150,21 @@ export class Analytics {
   isOptedOut(): boolean { return this.optedOut; }
   getUserId(): string | undefined { return this.userId; }
   getAnonymousId(): string | undefined {
-    return this.active() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
+    return this.active() && this.identityAllowed() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
+  }
+
+  private identityAllowed(): boolean {
+    return this.consent ?? !this.options.requireConsent;
+  }
+
+  private loadIdentity(): void {
+    // An optOut() made before consent is kept and now persisted.
+    if (this.optedOut) { writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies); return; }
+    this.optedOut = readOptOut(this.keys.optOut);
+    if (this.optedOut) return;
+    // Create the persistent ID on first load, before any event is queued.
+    generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
+    this.userId ||= readUserId(this.keys.userId);
   }
 
   private active(): boolean {
@@ -171,13 +218,15 @@ export class Analytics {
       ...(event ? { event } : {}),
       message_id: crypto.randomUUID(),
       channel: 'web',
-      version: '0.1.0',
+      version: '0.2.0',
       original_timestamp: originalTimestamp,
       context: context ?? this.captureContext(),
       properties,
-      anonymous_id: generateAnonymousId(this.keys.anonymousId, cross),
-      session_id: touchSessionId(this.keys.sessionId, cross),
-      ...(this.userId ? { user_id: this.userId } : {}),
+      ...(this.identityAllowed() ? {
+        anonymous_id: generateAnonymousId(this.keys.anonymousId, cross),
+        session_id: touchSessionId(this.keys.sessionId, cross),
+        ...(this.userId ? { user_id: this.userId } : {}),
+      } : {}),
       ...(type === 'identify' ? { traits } : {}),
     };
     this.pending.push(payload);
