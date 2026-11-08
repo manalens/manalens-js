@@ -142,33 +142,7 @@ The snippet shares identity across subdomains by default. Add
 `window.untitledAnalytics.setConsent(true)` from your banner. The instance
 is available as `window.untitledAnalytics`.
 
-## Optional session replay
-
-Replay is a separate import so ordinary analytics installs do not load rrweb.
-The recorder first checks `/v1/replay/config` and records only when replay is
-enabled for the project and its randomly generated recording ID is inside the
-project's configured sample. The collector enforces the same deterministic
-sample. It rechecks every 30 seconds and stops if the setting is disabled or
-unavailable. It creates an in-memory recording ID, batches
-rrweb events to `/v1/replay`, masks text and input values, and removes URL query
-strings and fragments by default. Add
-`data-private` to block whole sections. Call the returned stop function when
-recording should end. Recordings appear on visitor profiles and expire after
-30 days. The collector also enforces a rolling 30-day upload byte budget.
-
-```ts
-import { startSessionReplay } from '@untitled-analytics/web/replay';
-
-const stopReplay = startSessionReplay({
-  writeKey: 'site_public_key',
-  endpoint: 'https://api.example.com',
-  getUserId: () => analytics.getUserId(),
-});
-```
-
-For script tags, load `/sdk-replay.js` separately and call
-`UntitledAnalyticsReplay.startSessionReplay({ writeKey, endpoint,
-getUserId: () => window.untitledAnalytics?.getUserId() })`.
+## Pageviews
 
 `page()` tracks the current page. By default the SDK also sends an initial
 pageview and listens for `popstate`. For routers that do not emit

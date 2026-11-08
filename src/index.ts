@@ -226,7 +226,7 @@ export class Analytics {
       ...(event ? { event } : {}),
       message_id: crypto.randomUUID(),
       channel: 'web',
-      version: '0.2.0',
+      version: '0.3.0',
       original_timestamp: originalTimestamp,
       context: context ?? this.captureContext(),
       properties,

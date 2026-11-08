@@ -1,6 +1,6 @@
 {
   "name": "@untitled-analytics/web",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Web analytics SDK with first-party identity, derived from the Formo Web SDK",
   "type": "module",
@@ -9,17 +9,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./snippet": "./dist/snippet.global.js",
-    "./replay": {
-      "types": "./dist/replay.d.ts",
-      "import": "./dist/replay.js"
-    }
+    "./snippet": "./dist/snippet.global.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/snippet.ts src/replay.ts --format esm --dts --out-dir dist && tsup src/snippet.ts --format iife --global-name UntitledAnalytics --out-dir dist && tsup src/replay.ts --format iife --global-name UntitledAnalyticsReplay --out-dir dist",
+    "build": "tsup src/index.ts src/snippet.ts --format esm --dts --clean --out-dir dist && tsup src/snippet.ts --format iife --global-name UntitledAnalytics --out-dir dist",
     "typecheck": "tsc --noEmit",
     "example": "pnpm build && node examples/server.mjs",
     "test:example": "pnpm build && node --test examples/smoke.mjs",
@@ -31,9 +27,5 @@
     "typescript": "^5.9.0"
   },
   "packageManager": "pnpm@11.9.0",
-  "license": "MIT",
-  "dependencies": {
-    "@rrweb/record": "^2.1.6",
-    "@rrweb/types": "^2.1.6"
-  }
+  "license": "MIT"
 }
