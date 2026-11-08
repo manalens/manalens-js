@@ -4,6 +4,10 @@ import { clearAnonymousId, clearSessionId, clearUserId, generateAnonymousId, rea
 import { storageKey } from './storage';
 import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 
+/** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
+export const LIBRARY_NAME = 'Untitled Analytics Web SDK';
+export const LIBRARY_VERSION = '0.4.0';
+
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 
 type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies'>>;
@@ -193,9 +197,9 @@ export class Analytics {
       ...(event ? { event } : {}),
       message_id: crypto.randomUUID(),
       channel: 'web',
-      version: '0.4.0',
+      version: LIBRARY_VERSION,
       original_timestamp: originalTimestamp,
-      context: context ?? this.captureContext(),
+      context: { ...(context ?? this.captureContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION },
       properties,
       ...(this.identityAllowed() ? {
         anonymous_id: generateAnonymousId(this.keys.anonymousId, cross),
