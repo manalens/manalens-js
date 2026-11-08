@@ -1,8 +1,57 @@
 # Untitled Analytics Web SDK
 
-The browser SDK preserves the generic Formo event envelope and uses the same
-identity model as the Formo Web SDK: it stores a persistent first-party
-anonymous ID in the browser.
+## What is the Untitled Analytics Web SDK?
+
+The Untitled Analytics Web SDK is an
+[open source](https://github.com/yosriady/untitled-analytics-sdk) JavaScript
+library for first-party web analytics and attribution. Use it to track page
+views, custom events and identified users in your website or web app, and to
+capture UTM parameters, referrers and ad click IDs (Google, Meta, Microsoft,
+TikTok, X, LinkedIn, Reddit, Snapchat) for marketing attribution.
+
+It keeps the generic Formo event envelope and uses the same identity model as
+the Formo Web SDK: it stores a persistent first-party anonymous ID in the
+browser (see [Browser storage](#browser-storage)).
+
+## Installation
+
+There are two ways to install the SDK:
+- [HTML snippet](#html-snippet-cdn) is recommended for static websites
+- [npm](#npm) for React, Next.js and other bundled apps
+
+### HTML snippet (CDN)
+
+Add this tag to the `<head>` of every page. Pin the exact version and keep the
+`integrity` attribute, so the browser refuses a changed file.
+
+```html
+<script
+  src="https://cdn.jsdelivr.net/npm/@untitled-analytics/web@0.4.0/dist/snippet.global.js"
+  integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
+  crossorigin="anonymous"
+  data-write-key="YOUR_WRITE_KEY"
+  data-endpoint="https://YOUR_COLLECTOR_ENDPOINT"
+  defer
+></script>
+```
+
+Get the `integrity` value in one of two ways:
+- Copy the complete tag from the GitHub release notes for that version. The
+  release workflow writes it after it checks that jsDelivr serves the
+  published bytes.
+- Run `bash scripts/generate-sri.sh --version 0.4.0 --check-registry --check-cdn`.
+  It downloads the published npm tarball, hashes `dist/snippet.global.js` from
+  it, and checks that npm and jsDelivr serve the same bytes.
+
+Change the version in the URL and the hash together. See
+[Snippet attributes](#snippet-attributes) for options. The instance is
+available as `window.untitledAnalytics`.
+
+### npm
+
+```sh
+npm install @untitled-analytics/web
+```
 
 ## Browser storage
 
@@ -35,7 +84,7 @@ By default identity is always on, like Formo. There is no remote
 then reads and writes no browser storage) or call `optOut()`. Sites that need
 consent before analytics storage can use the optional consent mode below.
 
-## Quick start
+## Usage
 
 ```ts
 import { createAnalytics } from '@untitled-analytics/web';
@@ -128,18 +177,12 @@ consentManager.onChange(granted => analytics.setConsent(granted));
 `setConsent()` also works without `requireConsent`: `setConsent(false)` then
 turns identity off for that instance.
 
-## Script tag
+## Snippet attributes
 
-```html
-<script src="https://api.example.com/sdk.js" data-write-key="site_public_key"
-  data-endpoint="https://api.example.com" defer></script>
-```
-
-The snippet shares identity across subdomains by default. Add
+`data-write-key` and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
 `data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
 `data-require-consent="true"` for consent mode and call
-`window.untitledAnalytics.setConsent(true)` from your banner. The instance
-is available as `window.untitledAnalytics`.
+`window.untitledAnalytics.setConsent(true)` from your banner.
 
 ## Pageviews
 
@@ -153,6 +196,25 @@ This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet or chain code. The anonymous ID, storage fallback and cookie
 domain logic are adapted from Formo's `generateAnonymousId`, `CookieStorage`
 and `cookiePolicy`.
+
+## Releasing
+
+Releases publish from `.github/workflows/release.yml`:
+
+1. Bump `version` in `package.json` on `main`.
+2. Push a matching tag, for example `git tag v0.4.0 && git push origin v0.4.0`.
+3. The workflow checks that the tag is on `main` and matches `package.json`,
+   runs typecheck, build and tests, packs the tarball, and publishes that exact
+   tarball with npm provenance (after approval in the `npm-publish`
+   environment).
+4. It then checks that the npm registry serves the same tarball, hashes
+   `dist/snippet.global.js` from it, waits until jsDelivr serves identical
+   bytes, and adds the pinned snippet tag to the GitHub release notes.
+
+Run the workflow manually (`workflow_dispatch`) for a dry run: it runs
+`npm publish --dry-run` and shows the SRI of the packed tarball in the job
+summary. Locally, `bash scripts/generate-sri.sh` packs this checkout and prints
+the tag without publishing.
 
 ## Local example and smoke check
 
