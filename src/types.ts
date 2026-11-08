@@ -1,7 +1,9 @@
 import type { acquisitionKeys } from './attribution-contract';
-/** The browser portion of Formo's event envelope. Anonymous identity is server-derived. */
+export type Traits = Record<string, string | number | boolean | null>;
+
+/** The browser portion of Formo's event envelope. */
 export interface AnalyticsEvent {
-  type: 'page' | 'track' | 'web_vitals';
+  type: 'page' | 'track' | 'identify';
   event?: string;
   message_id: string;
   channel: 'web';
@@ -21,38 +23,35 @@ export interface AnalyticsEvent {
     locale?: string;
   };
   properties: Record<string, string | number | boolean | null>;
-  user_id?: string;
+  /** Persistent first-party browser ID (UUID). Absent only in consent mode before consent. */
   anonymous_id?: string;
-  attribution_consent?: boolean;
+  /** Client session ID (UUID); rotates after 30 minutes without events. Absent like anonymous_id. */
+  session_id?: string;
+  /** Set by identify() and attached to every later event until reset(). */
+  user_id?: string;
+  /** identify events only. */
+  traits?: Traits;
 }
 
 export interface AnalyticsOptions {
   /** Public write key for one site. The server resolves this to project_id. */
   writeKey: string;
   endpoint: string;
-  /** Opt-in persistent identity. Also requires project enablement and consent. */
-  attribution?: { consent: () => boolean };
+  /**
+   * Scope identity cookies to the apex domain (`.example.com`) so subdomains
+   * such as app.example.com and example.com share one anonymous ID. Default true,
+   * like Formo. Set false for host-only cookies.
+   */
+  crossSubdomainCookies?: boolean;
+  /**
+   * Consent mode, default false. When true, no cookie or localStorage is read
+   * or written, and events carry no anonymous_id / session_id / user_id, until
+   * setConsent(true). For sites behind a consent banner (e.g. EU visitors).
+   */
+  requireConsent?: boolean;
   autoPageviews?: boolean;
   batchSize?: number;
   flushIntervalMs?: number;
-  /** Suppress events, including queued events, when true. */
+  /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
-  /** Optional web-vitals v5+ module. No performance code is loaded when omitted. */
-  webVitals?: WebVitalsModule;
-}
-
-export interface WebVitalMetric {
-  name: 'LCP' | 'INP' | 'CLS' | 'FCP' | 'TTFB';
-  value: number;
-  navigationType?: string;
-}
-
-export type WebVitalCallback = (metric: WebVitalMetric) => void;
-export type WebVitalRegistrar = (callback: WebVitalCallback, options?: { reportAllChanges?: boolean }) => void;
-export interface WebVitalsModule {
-  onLCP?: WebVitalRegistrar;
-  onINP?: WebVitalRegistrar;
-  onCLS?: WebVitalRegistrar;
-  onFCP?: WebVitalRegistrar;
-  onTTFB?: WebVitalRegistrar;
 }
