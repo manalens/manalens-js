@@ -21,6 +21,9 @@ export interface AnalyticsEvent {
     paid_source?: string;
     click_id?: string;
     locale?: string;
+    /** Formo-style SDK identification. */
+    library_name?: string;
+    library_version?: string;
   };
   properties: Record<string, string | number | boolean | null>;
   /** Persistent first-party browser ID (UUID). Absent only in consent mode before consent. */

@@ -91,6 +91,8 @@ test('ESM SDK sends page and custom events with first-party identity to a local 
     assert.equal(events[0].context.page.url, 'https://example.com/pricing');
     assert.equal(events[0].context.referrer, 'https://google.com');
     assert.equal(events[0].context.utm_source, 'Newsletter');
+    assert.equal(events[0].context.library_name, 'Untitled Analytics Web SDK');
+    assert.equal(events[0].context.library_version, events[0].version);
     assert.deepEqual(events[1].properties, { plan: 'starter' });
     assert.match(events[0].anonymous_id, uuid);
     assert.match(events[0].session_id, uuid);
@@ -102,6 +104,18 @@ test('ESM SDK sends page and custom events with first-party identity to a local 
     sdk.destroy(); globalThis.fetch = originalFetch;
     await new Promise(resolve => server.close(resolve));
   }
+});
+
+test('an Android app referrer such as YouTube is kept as android-app://<package>', async () => {
+  const { document } = browser('https://example.com/');
+  document.referrer = 'android-app://com.google.android.youtube/';
+  const sent = [];
+  globalThis.fetch = collector(sent);
+  const sdk = new Analytics({ writeKey: 'ua_example', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    await sdk.flush();
+    assert.equal(eventsOf(sent)[0].context.referrer, 'android-app://com.google.android.youtube');
+  } finally { sdk.destroy(); }
 });
 
 test('browser snippet initializes and sends a pageview', async () => {

@@ -12,7 +12,10 @@ export function pageContext(pageUrl = location.href): AnalyticsEvent['context'] 
   if (document.referrer) {
     try {
       const ref = new URL(document.referrer);
-      if (ref.hostname !== url.hostname && /^https?:$/.test(ref.protocol)) referrer = ref.origin;
+      // Android Chrome reports an app's package when a link opens from an app,
+      // e.g. android-app://com.google.android.youtube/. The collector classifies it.
+      if (ref.protocol === 'android-app:') referrer = `android-app://${ref.host.toLowerCase()}`;
+      else if (ref.hostname !== url.hostname && /^https?:$/.test(ref.protocol)) referrer = ref.origin;
     } catch { /* Ignore malformed referrers. */ }
   }
   return {

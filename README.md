@@ -228,12 +228,15 @@ localStorage identity, and cross-subdomain cookie checks. No Formono or cloud se
 
 Automatically captures the five standard UTM fields plus `utm_id`,
 `utm_source_platform`, `utm_creative_format`, `utm_marketing_tactic`; external
-referrer origins; `ref` / `referral` / `referral_code`; Google `gclid`, `gbraid`,
+referrer origins and Android app referrers (`android-app://com.google.android.youtube`); `ref` / `referral` / `referral_code`; Google `gclid`, `gbraid`,
 `wbraid`, `gad_source`; Meta `fbclid`; Microsoft `msclkid`; TikTok `ttclid`;
 X `twclid`; LinkedIn `li_fat_id`; Reddit `rdt_cid`; Snapchat `ScCid`. All
 network IDs are preserved. `gad_source` marks the source but is not a click ID.
 Derived `paid_source` and a deterministic `click_id` remain compatible with
 Formo-style event context. Paid UTMs classify as `paid_utm` without a network ID.
+The collector classifies each event into an acquisition `channel_type` (for example
+Organic Video or Paid Video for YouTube). Every event also carries
+`context.library_name` and `context.library_version`.
 
 A coherent campaign is carried **in memory** across SPA routes and subsequent
 track/identify calls, replaced when a new tagged acquisition arrives, and
