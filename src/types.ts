@@ -3,7 +3,7 @@ export type Traits = Record<string, string | number | boolean | null>;
 
 /** The browser portion of Formo's event envelope. */
 export interface AnalyticsEvent {
-  type: 'page' | 'track' | 'identify' | 'web_vitals';
+  type: 'page' | 'track' | 'identify';
   event?: string;
   message_id: string;
   channel: 'web';
@@ -54,22 +54,4 @@ export interface AnalyticsOptions {
   flushIntervalMs?: number;
   /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
-  /** Optional web-vitals v5+ module. No performance code is loaded when omitted. */
-  webVitals?: WebVitalsModule;
-}
-
-export interface WebVitalMetric {
-  name: 'LCP' | 'INP' | 'CLS' | 'FCP' | 'TTFB';
-  value: number;
-  navigationType?: string;
-}
-
-export type WebVitalCallback = (metric: WebVitalMetric) => void;
-export type WebVitalRegistrar = (callback: WebVitalCallback, options?: { reportAllChanges?: boolean }) => void;
-export interface WebVitalsModule {
-  onLCP?: WebVitalRegistrar;
-  onINP?: WebVitalRegistrar;
-  onCLS?: WebVitalRegistrar;
-  onFCP?: WebVitalRegistrar;
-  onTTFB?: WebVitalRegistrar;
 }
