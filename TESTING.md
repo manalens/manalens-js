@@ -1,6 +1,6 @@
 # SDK tests
 
-On 2026-11-08, `pnpm typecheck` and all 43 tests in `pnpm test:example` passed.
+On 2026-11-08, `pnpm typecheck` and all 46 tests in `pnpm test:example` passed.
 GitHub Actions runs both on pull requests and main.
 
 The examples build the actual ESM and browser bundles. Tests cover page/custom
@@ -9,7 +9,7 @@ events, the script snippet (including `data-cross-subdomain`), the first-party
 to the apex domain, write-key scoping, the 30-minute `session_id`, identify
 events with persisted `user_id`, `reset()`, `optOut()` / `optIn()`, the
 optional consent mode (`requireConsent`, `setConsent`, `data-require-consent`),
-failed in-flight batches after `setConsent(false)` / `optOut()`, deletion and
+failed in-flight batches after `reset()`, `setConsent(false)` (also then `true`), `optOut()` (also then `optIn()`), deletion and
 opt-out persistence before consent, sanitized
 URLs/referrers, route changes, retry identity, disabled tracking (no storage
 access) and validation, sparse one-per-load Web Vitals, lifecycle cleanup, and

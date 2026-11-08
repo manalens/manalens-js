@@ -14,6 +14,10 @@ export class Analytics {
   private timer?: ReturnType<typeof setInterval>;
   private previousPath?: string;
   private stopped = false;
+  /** Bumped whenever identity is cleared or rotated; stale in-flight batches lose their identity. */
+  private identityGeneration = 0;
+  /** Bumped by optOut(); batches in flight across an opt-out are never re-sent. */
+  private optOutGeneration = 0;
   private optedOut = false;
   private readonly vitals: Partial<Record<'lcp' | 'inp' | 'cls' | 'fcp' | 'ttfb', number>> = {};
   private readonly landingUrl = typeof location !== 'undefined' ? location.href : '';
@@ -99,6 +103,7 @@ export class Analytics {
    * anonymous_id, session_id or user_id. Also works without requireConsent.
    */
   setConsent(granted: boolean): void {
+    if (!granted) this.identityGeneration++;
     this.consent = granted;
     if (typeof window === 'undefined' || this.options.disabled) return;
     if (granted) {
@@ -119,6 +124,7 @@ export class Analytics {
 
   /** Forget the user ID, anonymous ID and session. The next event starts a fresh identity. */
   reset(): void {
+    this.identityGeneration++;
     this.userId = undefined;
     this.deferredIdentify = undefined;
     // Deletion needs no consent, so storage is cleared in every mode.
@@ -134,6 +140,8 @@ export class Analytics {
 
   /** Stop tracking this browser, drop queued events and forget its identity. Persists across page loads. */
   optOut(): void {
+    this.identityGeneration++;
+    this.optOutGeneration++;
     this.pending = [];
     this.reset();
     this.optedOut = true;
@@ -143,6 +151,7 @@ export class Analytics {
 
   /** Resume tracking after optOut(). A new anonymous ID is created. */
   optIn(): void {
+    this.identityGeneration++;
     this.optedOut = false;
     if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
@@ -235,6 +244,8 @@ export class Analytics {
   async flush(keepalive = false): Promise<void> {
     if (!this.active() || this.pending.length === 0) return;
     const batch = this.pending.splice(0, this.options.batchSize);
+    const generation = this.identityGeneration;
+    const optOutGeneration = this.optOutGeneration;
     try {
       const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v1/events', {
         method: 'POST',
@@ -247,14 +258,17 @@ export class Analytics {
     } catch {
       // Retry in memory only; the queue is never written to browser storage.
       // State may have changed while the request was in flight: drop the batch
-      // after optOut()/destroy(), and strip identity after setConsent(false).
-      if (!this.active()) return;
-      this.pending.unshift(...(this.identityAllowed() ? batch : stripIdentity(batch)));
+      // after optOut()/destroy(); strip identity after reset(), setConsent(false)
+      // or any other identity change, even if consent was granted again since.
+      if (!this.active() || optOutGeneration !== this.optOutGeneration) return;
+      const stale = generation !== this.identityGeneration || !this.identityAllowed();
+      this.pending.unshift(...(stale ? stripIdentity(batch) : batch));
       this.pending = this.pending.slice(0, 100);
     }
   }
 
   destroy(): void {
+    this.identityGeneration++;
     if (this.timer) clearInterval(this.timer);
     if (typeof window !== 'undefined') {
       window.removeEventListener('pagehide', this.onPageHide);
