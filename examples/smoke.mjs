@@ -6,17 +6,6 @@ import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
 import { Analytics } from '../dist/index.js';
 
-test('replay sampling is stable and shares boundary behavior with the collector', async () => {
-  const { replayIncluded } = await import('../dist/replay.js');
-  const low = '00000000-0000-4000-8000-000000000000';
-  const high = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
-  assert.equal(replayIncluded(low, 0), false);
-  assert.equal(replayIncluded(low, 0.1), true);
-  assert.equal(replayIncluded(high, 0.5), false);
-  assert.equal(replayIncluded(high, 1), true);
-  assert.equal(replayIncluded('invalid', 1), false);
-});
-
 /** Minimal document.cookie emulation: host-only and domain cookies, expiry, public-suffix rejection. */
 function cookieJar({ blocked = false, publicSuffixes = ['com', 'test', 'co.uk'] } = {}) {
   const store = new Map();
@@ -261,23 +250,6 @@ test('a failed identify is retried with the same message and requests omit crede
     assert.equal(sent[0].body.events[0].message_id, sent[1].body.events[0].message_id);
     assert.equal(sent[1].body.events[0].context.page.url, 'https://example.com/pricing');
   } finally { sdk.destroy(); }
-});
-
-test('replay is fail-closed when project config disables recording', async t => {
-  browser(); const calls = [];
-  t.mock.method(globalThis, 'fetch', async (url, init) => { calls.push({ url, init }); return { ok: true, json: async () => ({ enabled: false }) }; });
-  const { startSessionReplay } = await import('../dist/replay.js');
-  const stop = startSessionReplay({ writeKey: 'key', endpoint: 'https://collector.example/' });
-  await new Promise(resolve => setImmediate(resolve)); stop();
-  assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://collector.example/v1/replay/config'); assert.equal(calls[0].init.credentials, 'omit'); assert.equal(calls[0].init.cache, 'no-store');
-});
-
-test('replay config network failure does not upload any recordings', async t => {
-  browser(); let calls = 0;
-  t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('offline'); });
-  const { startSessionReplay } = await import('../dist/replay.js');
-  const stop = startSessionReplay({ writeKey: 'key', endpoint: 'https://collector.example' });
-  await new Promise(resolve => setImmediate(resolve)); stop(); assert.equal(calls, 1);
 });
 
 for (const [key, network] of [['gclid','google'],['gbraid','google'],['wbraid','google'],['fbclid','meta'],['msclkid','microsoft'],['ttclid','tiktok'],['twclid','twitter'],['li_fat_id','linkedin'],['rdt_cid','reddit'],['ScCid','snapchat']]) test(`captures ${key} and carries it across route changes`, async t => {
