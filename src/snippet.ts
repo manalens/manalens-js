@@ -12,7 +12,8 @@ if (typeof document !== 'undefined') {
     window.untitledAnalytics = new Analytics({
       writeKey: key,
       endpoint,
-      crossSubdomainCookies: script?.dataset.crossSubdomain === 'true',
+      crossSubdomainCookies: script?.dataset.crossSubdomain !== 'false',
+      requireConsent: script?.dataset.requireConsent === 'true',
     });
   }
 }

@@ -128,13 +128,13 @@ test('browser snippet initializes and sends a pageview', async () => {
   window.untitledAnalytics.destroy();
 });
 
-test('snippet data-cross-subdomain="true" scopes the anonymous ID cookie to the apex domain', async () => {
+for (const [attr, apex] of [[undefined, true], ['true', true], ['false', false]]) test(`snippet data-cross-subdomain=${attr} ${apex ? 'scopes the cookie to the apex domain' : 'keeps the cookie host-only'}`, async () => {
   const { window, document, jar } = browser('https://play.snippet.com/');
-  document.currentScript = { dataset: { writeKey: 'ua_snippet', endpoint: 'https://collector.example', crossSubdomain: 'true' } };
+  document.currentScript = { dataset: { writeKey: 'ua_snippet', endpoint: 'https://collector.example', ...(attr ? { crossSubdomain: attr } : {}) } };
   const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async () => ({ ok: true }) });
   const [cookie] = jar.find('ua_').filter(c => c.name.endsWith('_anonymous-id'));
-  assert.equal(cookie.domain, 'snippet.com'); assert.equal(cookie.hostOnly, false);
+  assert.equal(cookie.domain, apex ? 'snippet.com' : 'play.snippet.com'); assert.equal(cookie.hostOnly, !apex);
   window.untitledAnalytics.destroy();
 });
 
@@ -319,7 +319,7 @@ test('anonymous ID is created on first load, stored in a one-year cookie, surviv
   let sdk = make();
   const cookie = jar.find('ua_').find(c => c.name.endsWith('_anonymous-id'));
   assert.match(decodeURIComponent(cookie.value), uuid, 'created before any event');
-  assert.equal(cookie.hostOnly, true, 'host-only by default');
+  assert.equal(cookie.hostOnly, false, 'apex-scoped by default, like Formo'); assert.equal(cookie.domain, 'example.com');
   assert.ok(cookie.expires > Date.now() + 364 * 86400000);
   assert.ok(jar.writes.some(raw => raw.includes('samesite=lax') && raw.includes('secure')));
   assert.equal(local.stored.size, 0, 'no localStorage copy while cookies work');
@@ -331,34 +331,34 @@ test('anonymous ID is created on first load, stored in a one-year cookie, surviv
   sdk = make({ writeKey: 'ua_other_site' }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, first); sdk.destroy();
 });
 
-test('crossSubdomainCookies shares one anonymous ID between example.com and play.example.com', async t => {
+test('by default one anonymous ID is shared between example.com and play.example.com', async t => {
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://play.shared.com/', { jar });
-  let sdk = make({ writeKey: 'ua_cross', crossSubdomainCookies: true });
+  let sdk = make({ writeKey: 'ua_cross' });
   const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   const cookie = jar.find('ua_').find(c => c.name.endsWith('_anonymous-id'));
   assert.equal(cookie.domain, 'shared.com'); assert.equal(cookie.hostOnly, false);
   browser('https://shared.com/', { jar });
-  sdk = make({ writeKey: 'ua_cross', crossSubdomainCookies: true });
+  sdk = make({ writeKey: 'ua_cross' });
   assert.equal((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
 });
 
-test('without crossSubdomainCookies each host keeps its own anonymous ID', async t => {
+test('crossSubdomainCookies: false keeps a separate anonymous ID per host', async t => {
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://play.split.com/', { jar });
-  let sdk = make({ writeKey: 'ua_split' }); const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  let sdk = make({ writeKey: 'ua_split', crossSubdomainCookies: false }); const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   browser('https://split.com/', { jar });
-  sdk = make({ writeKey: 'ua_split' }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
+  sdk = make({ writeKey: 'ua_split', crossSubdomainCookies: false }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
 });
 
-test('an existing host-only cookie migrates to the apex domain when crossSubdomainCookies is enabled', async t => {
+test('an existing host-only cookie migrates to the apex domain under the default setting', async t => {
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://app.migrate.com/', { jar });
-  let sdk = make({ writeKey: 'ua_migrate' }); const legacy = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
-  sdk = make({ writeKey: 'ua_migrate', crossSubdomainCookies: true }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, legacy); sdk.destroy();
+  let sdk = make({ writeKey: 'ua_migrate', crossSubdomainCookies: false }); const legacy = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  sdk = make({ writeKey: 'ua_migrate' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, legacy); sdk.destroy();
   const cookies = jar.find('ua_').filter(c => c.name.endsWith('_anonymous-id'));
   assert.equal(cookies.length, 1); assert.equal(cookies[0].domain, 'migrate.com');
 });
@@ -424,4 +424,54 @@ test('optOut drops queued events, clears identity, persists across reloads, and 
   sdk.optIn(); const after = await firstEvent(sdk, sent);
   assert.match(after.anonymous_id, uuid); assert.notEqual(after.anonymous_id, before); assert.equal(after.user_id, undefined);
   sdk.destroy();
+});
+
+test('requireConsent: no storage and no identity fields until setConsent(true)', async t => {
+  const { jar, local } = browser('https://consent.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = make({ writeKey: 'ua_consent', requireConsent: true });
+  try {
+    sdk.track('before'); await sdk.identify('user_c', { plan: 'pro' }); await sdk.flush();
+    assert.equal(jar.writes.length, 0); assert.equal(local.stored.size, 0); assert.equal(sdk.getAnonymousId(), undefined);
+    const [before] = eventsOf(sent);
+    assert.equal(before.type, 'track');
+    for (const field of ['anonymous_id', 'session_id', 'user_id']) assert.equal(before[field], undefined);
+    assert.equal(eventsOf(sent).some(event => event.type === 'identify'), false, 'identify waits for consent');
+    sdk.setConsent(true); sdk.track('after'); await sdk.flush();
+    const events = eventsOf(sent);
+    const identify = events.find(event => event.type === 'identify'); const after = events.at(-1);
+    assert.equal(identify.user_id, 'user_c'); assert.deepEqual(identify.traits, { plan: 'pro' });
+    assert.match(after.anonymous_id, uuid); assert.match(after.session_id, uuid); assert.equal(after.user_id, 'user_c');
+    assert.ok(jar.find('ua_').some(c => c.name.endsWith('_anonymous-id')));
+  } finally { sdk.destroy(); }
+});
+
+test('setConsent(false) clears identity storage and strips identity from queued events', async t => {
+  const { jar, local } = browser('https://withdraw.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = make({ writeKey: 'ua_withdraw', requireConsent: true });
+  try {
+    sdk.setConsent(true);
+    await sdk.identify('user_w', { plan: 'pro' });
+    sdk.track('queued');
+    sdk.setConsent(false);
+    assert.deepEqual(jar.find('ua_'), []); assert.equal(local.stored.size, 0); assert.equal(sdk.getUserId(), undefined);
+    const writes = jar.writes.length;
+    sdk.track('later'); await sdk.flush();
+    const [queued, later] = eventsOf(sent).slice(-2);
+    for (const event of [queued, later]) for (const field of ['anonymous_id', 'session_id', 'user_id']) assert.equal(event[field], undefined);
+    assert.equal(queued.event, 'queued'); assert.equal(later.event, 'later');
+    assert.equal(jar.writes.length, writes, 'no storage writes after withdrawal');
+  } finally { sdk.destroy(); }
+});
+
+test('snippet data-require-consent="true" starts without browser storage', async () => {
+  const { window, document, jar } = browser('https://snippet-consent.com/');
+  document.currentScript = { dataset: { writeKey: 'ua_snippet_consent', endpoint: 'https://collector.example', requireConsent: 'true' } };
+  const sent = [];
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
+  await window.untitledAnalytics.flush();
+  assert.equal(jar.writes.length, 0); assert.equal(sent[0].events[0].anonymous_id, undefined);
+  window.untitledAnalytics.destroy();
 });

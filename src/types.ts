@@ -23,10 +23,10 @@ export interface AnalyticsEvent {
     locale?: string;
   };
   properties: Record<string, string | number | boolean | null>;
-  /** Persistent first-party browser ID (UUID). */
-  anonymous_id: string;
-  /** Client session ID (UUID); rotates after 30 minutes without events. */
-  session_id: string;
+  /** Persistent first-party browser ID (UUID). Absent only in consent mode before consent. */
+  anonymous_id?: string;
+  /** Client session ID (UUID); rotates after 30 minutes without events. Absent like anonymous_id. */
+  session_id?: string;
   /** Set by identify() and attached to every later event until reset(). */
   user_id?: string;
   /** identify events only. */
@@ -39,10 +39,16 @@ export interface AnalyticsOptions {
   endpoint: string;
   /**
    * Scope identity cookies to the apex domain (`.example.com`) so subdomains
-   * such as app.example.com and example.com share one anonymous ID. Default false
-   * (host-only cookies).
+   * such as app.example.com and example.com share one anonymous ID. Default true,
+   * like Formo. Set false for host-only cookies.
    */
   crossSubdomainCookies?: boolean;
+  /**
+   * Consent mode, default false. When true, no cookie or localStorage is read
+   * or written, and events carry no anonymous_id / session_id / user_id, until
+   * setConsent(true). For sites behind a consent banner (e.g. EU visitors).
+   */
+  requireConsent?: boolean;
   autoPageviews?: boolean;
   batchSize?: number;
   flushIntervalMs?: number;

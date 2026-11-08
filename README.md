@@ -20,17 +20,17 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
 
-Cookies are host-only by default. Set `crossSubdomainCookies: true` to scope
-them to the apex domain (`.example.com`), so `example.com` and
-`play.example.com` share one `anonymous_id`. The apex is found by probing which
+Like Formo, cookies are scoped to the apex domain (`.example.com`) by default
+(`crossSubdomainCookies: true`), so `example.com` and `play.example.com` share
+one `anonymous_id`. Set `crossSubdomainCookies: false` for host-only cookies. The apex is found by probing which
 domain the browser accepts, so public suffixes such as `vercel.app` stay
-host-only. Turning the option on migrates an existing host-only cookie on the
-current host to the apex domain.
+host-only. An existing host-only cookie on the current host (for example from
+SDK 0.1 or from `crossSubdomainCookies: false`) migrates to the apex domain.
 
-Identity is always on. There is no consent callback and no remote
+By default identity is always on, like Formo. There is no remote
 `attribution_enabled` check. To stop collection, pass `disabled: true` (the SDK
-then reads and writes no browser storage) or call `optOut()`. If your site needs
-consent before analytics storage, do not create the SDK until consent is given.
+then reads and writes no browser storage) or call `optOut()`. Sites that need
+consent before analytics storage can use the optional consent mode below.
 
 ## Quick start
 
@@ -40,7 +40,7 @@ import { createAnalytics } from '@untitled-analytics/web';
 const analytics = createAnalytics({
   writeKey: 'site_public_key',
   endpoint: 'https://api.example.com',
-  crossSubdomainCookies: true, // optional, default false
+  // crossSubdomainCookies: false, // optional: host-only cookies (default true)
 });
 analytics.track('signup_completed', { plan: 'starter' });
 ```
@@ -51,17 +51,18 @@ analytics.track('signup_completed', { plan: 'starter' });
 | --- | --- | --- |
 | `writeKey` | required | Public write key for one site |
 | `endpoint` | required | Collector base URL |
-| `crossSubdomainCookies` | `false` | Apex-domain identity cookies |
+| `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview plus `popstate` / `ua:navigate` |
 | `batchSize` | `10` | Events per request |
 | `flushIntervalMs` | `5000` | Flush timer |
+| `requireConsent` | `false` | Consent mode; see below |
 | `disabled` | `false` | No events and no browser storage |
 | `webVitals` | none | `web-vitals` v5+ module |
 
 ### Methods
 
 `page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
-`reset()`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
+`reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
 `getAnonymousId()`, `flush(keepalive?)`, `destroy()`.
 
 ### Event envelope
@@ -70,7 +71,8 @@ Each event in `POST /v1/events` (`{ events: [...] }`) has `type` (`page`,
 `track`, `identify` or `web_vitals`), `event` (track only), `message_id`,
 `channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
 `anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
-(identify only).
+(identify only). In consent mode before consent, `anonymous_id`, `session_id`
+and `user_id` are absent.
 
 ## Identify logged-in users
 
@@ -99,14 +101,42 @@ for one year, so later page loads send nothing. `optIn()` removes the flag and
 creates a new anonymous ID. `disabled: true` turns the SDK off for one instance
 and does not touch browser storage.
 
+## Optional consent mode
+
+Default behaviour is the persistent first-party ID above. EU sites, or any site
+that shows a consent banner before analytics storage, should set
+`requireConsent: true` (snippet: `data-require-consent="true"`). Then:
+
+- Until `setConsent(true)`, the SDK reads and writes no cookies or
+  localStorage. Page and track events are still sent, with no
+  `anonymous_id`, `session_id` or `user_id`.
+- An `identify()` call made before consent is held in memory and sent when
+  consent is granted.
+- `setConsent(true)` creates or restores the persistent ID. Call it on each
+  page load once your consent manager reports consent; the SDK does not store
+  the consent choice.
+- `setConsent(false)` clears all identity storage, drops the user ID, removes
+  identity fields from queued events and discards queued identify events.
+
+```ts
+const analytics = createAnalytics({ writeKey, endpoint, requireConsent: true });
+consentManager.onChange(granted => analytics.setConsent(granted));
+```
+
+`setConsent()` also works without `requireConsent`: `setConsent(false)` then
+turns identity off for that instance.
+
 ## Script tag
 
 ```html
 <script src="https://api.example.com/sdk.js" data-write-key="site_public_key"
-  data-endpoint="https://api.example.com" data-cross-subdomain="true" defer></script>
+  data-endpoint="https://api.example.com" defer></script>
 ```
 
-`data-cross-subdomain="true"` sets `crossSubdomainCookies: true`. The instance
+The snippet shares identity across subdomains by default. Add
+`data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
+`data-require-consent="true"` for consent mode and call
+`window.untitledAnalytics.setConsent(true)` from your banner. The instance
 is available as `window.untitledAnalytics`.
 
 ## Optional session replay
