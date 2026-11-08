@@ -2,7 +2,7 @@
   "name": "@untitled-analytics/web",
   "version": "0.1.0",
   "private": true,
-  "description": "Cookieless web analytics SDK derived from the Formo event contract",
+  "description": "Web analytics SDK with first-party identity, derived from the Formo Web SDK",
   "type": "module",
   "exports": {
     ".": {
