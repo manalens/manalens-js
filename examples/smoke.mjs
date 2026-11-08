@@ -475,3 +475,71 @@ test('snippet data-require-consent="true" starts without browser storage', async
   assert.equal(jar.writes.length, 0); assert.equal(sent[0].events[0].anonymous_id, undefined);
   window.untitledAnalytics.destroy();
 });
+
+function gatedFetch(sent) {
+  let release;
+  const fetch = async (url, init) => {
+    sent.push({ url, body: JSON.parse(init.body) });
+    if (release === undefined) return { ok: true };
+    const gate = release; release = undefined; await gate.promise; throw new Error('offline');
+  };
+  return { fetch, holdNext() { let resolve; const promise = new Promise(r => { resolve = r; }); release = { promise }; return resolve; } };
+}
+
+test('a failed in-flight batch is re-queued without identity after setConsent(false)', async t => {
+  browser('https://race.com/');
+  const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
+  const sdk = make({ writeKey: 'ua_race', requireConsent: true });
+  try {
+    sdk.setConsent(true);
+    sdk.track('a');
+    const open = gate.holdNext();
+    const pendingIdentify = sdk.identify('user_r', { plan: 'pro' });
+    await new Promise(resolve => setImmediate(resolve));
+    sdk.setConsent(false);
+    open(); await pendingIdentify;
+    await sdk.flush();
+    const retried = sent.at(-1).body.events;
+    assert.deepEqual(retried.map(event => event.event ?? event.type), ['a']);
+    for (const field of ['anonymous_id', 'session_id', 'user_id']) assert.equal(retried[0][field], undefined);
+  } finally { sdk.destroy(); }
+});
+
+test('a failed in-flight batch is dropped after optOut()', async t => {
+  browser('https://race-optout.com/');
+  const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
+  const sdk = make({ writeKey: 'ua_race_optout' });
+  try {
+    sdk.track('a');
+    const open = gate.holdNext();
+    const flushing = sdk.flush();
+    await new Promise(resolve => setImmediate(resolve));
+    sdk.optOut(); open(); await flushing;
+    sdk.optIn(); await sdk.flush();
+    assert.equal(sent.length, 1, 'nothing re-sent after opt-out');
+  } finally { sdk.destroy(); }
+});
+
+test('consent mode before consent: reset() deletes stored identity and optOut() persists the flag', async t => {
+  const jar = cookieJar(); const local = memoryStorage();
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const instances = []; t.after(() => instances.forEach(instance => instance.destroy()));
+  const own = options => { const instance = make(options); instances.push(instance); return instance; };
+  browser('https://play.delete.com/', { jar, local });
+  let sdk = own({ writeKey: 'ua_delete' }); await sdk.identify('user_d'); sdk.destroy();
+  local.setItem([...jar.store.values()].find(c => c.name.endsWith('_anonymous-id')).name, 'stale-copy');
+  assert.ok(jar.find('ua_').length >= 3);
+
+  sdk = own({ writeKey: 'ua_delete', requireConsent: true });
+  sdk.reset();
+  assert.deepEqual(jar.find('ua_'), [], 'apex and host cookies cleared without consent');
+  assert.equal(local.stored.size, 0, 'localStorage cleared without consent');
+  sdk.optOut(); sdk.destroy();
+  assert.ok(jar.find('ua_').some(c => c.name.endsWith('_opt-out')));
+
+  sdk = own({ writeKey: 'ua_delete', requireConsent: true });
+  const before = sent.length; sdk.track('ignored'); await sdk.flush();
+  assert.equal(sdk.isOptedOut(), true); assert.equal(sent.length, before);
+  sdk.setConsent(true); assert.equal(sdk.isOptedOut(), true, 'consent does not override opt-out');
+  sdk.destroy();
+});
