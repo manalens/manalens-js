@@ -1,12 +1,38 @@
 # Untitled Analytics Web SDK
 
-The browser SDK preserves the generic Formo event envelope while sending no
-cookies. Daily mode uses no localStorage IDs, sessionStorage IDs, or cross-day anonymous IDs. The
-ingestion server assigns a site-scoped daily rotating `session_id`.
+The browser SDK preserves the generic Formo event envelope and uses the same
+identity model as the Formo Web SDK: it stores a persistent first-party
+anonymous ID in the browser.
 
-That inherited server field is currently a daily anonymous ID. A distinct
-inactivity-bounded session ID is planned; the SDK never persists the anonymous
-ID in the browser.
+## Browser storage
+
+On first load the SDK creates a random UUID `anonymous_id` and stores it in a
+first-party cookie (`ua_<hash of write key>_anonymous-id`, one year,
+`SameSite=Lax`, `Secure` on HTTPS). If the browser rejects the cookie, the ID
+goes to `localStorage` under the same key, and then to page memory. When a
+cookie later works again, the SDK adopts the stored ID into the cookie and
+removes the `localStorage` copy. Every event carries `anonymous_id`.
+
+| Key suffix | Where | Lifetime | Purpose |
+| --- | --- | --- | --- |
+| `anonymous-id` | cookie, else localStorage, else memory | 1 year, refreshed on each event | Persistent browser ID |
+| `session-id` | cookie, else localStorage, else memory | 30 minutes of inactivity | `session_id` on each event |
+| `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
+| `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
+
+Cookies are host-only by default. Set `crossSubdomainCookies: true` to scope
+them to the apex domain (`.example.com`), so `example.com` and
+`play.example.com` share one `anonymous_id`. The apex is found by probing which
+domain the browser accepts, so public suffixes such as `vercel.app` stay
+host-only. Turning the option on migrates an existing host-only cookie on the
+current host to the apex domain.
+
+Identity is always on. There is no consent callback and no remote
+`attribution_enabled` check. To stop collection, pass `disabled: true` (the SDK
+then reads and writes no browser storage) or call `optOut()`. If your site needs
+consent before analytics storage, do not create the SDK until consent is given.
+
+## Quick start
 
 ```ts
 import { createAnalytics } from '@untitled-analytics/web';
@@ -14,24 +40,74 @@ import { createAnalytics } from '@untitled-analytics/web';
 const analytics = createAnalytics({
   writeKey: 'site_public_key',
   endpoint: 'https://api.example.com',
+  crossSubdomainCookies: true, // optional, default false
 });
 analytics.track('signup_completed', { plan: 'starter' });
 ```
 
+### Options
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `writeKey` | required | Public write key for one site |
+| `endpoint` | required | Collector base URL |
+| `crossSubdomainCookies` | `false` | Apex-domain identity cookies |
+| `autoPageviews` | `true` | Initial pageview plus `popstate` / `ua:navigate` |
+| `batchSize` | `10` | Events per request |
+| `flushIntervalMs` | `5000` | Flush timer |
+| `disabled` | `false` | No events and no browser storage |
+| `webVitals` | none | `web-vitals` v5+ module |
+
+### Methods
+
+`page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
+`reset()`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
+`getAnonymousId()`, `flush(keepalive?)`, `destroy()`.
+
+### Event envelope
+
+Each event in `POST /v1/events` (`{ events: [...] }`) has `type` (`page`,
+`track`, `identify` or `web_vitals`), `event` (track only), `message_id`,
+`channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
+`anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
+(identify only).
+
 ## Identify logged-in users
 
-Call `identify()` after login and on each authenticated page load. Use a stable
-ID from your app; email is an optional profile property, not the identity key.
-Identity lives in SDK memory only. Call `clearUserId()` on logout. The API stores
-the custom properties in a project-scoped profile, and subsequent events carry
-`user_id`. Previously anonymous events are not retroactively merged.
+Call `identify()` after login. No wallet is needed. Use a stable ID from your
+app; email is an optional trait, not the identity key. `identify()` queues an
+`identify` event with `user_id` and `traits` and flushes it. Like Formo's
+`user-id` key, the user ID is stored in a first-party browser-session cookie
+and is restored on later page loads, so later events carry `user_id`. Events
+sent before `identify()` share the same `anonymous_id`, so the collector can
+link them to the user.
+
+Call `reset()` on logout. It clears the user ID, the anonymous ID and the
+session from every storage layer. The next event starts a new anonymous ID.
 
 ```ts
 await analytics.identify('user_123', { email: 'person@example.com', plan: 'pro' });
 analytics.track('subscription_started');
 // On logout:
-analytics.clearUserId();
+analytics.reset();
 ```
+
+## Opt-out
+
+`optOut()` drops queued events, clears all identity, and stores an opt-out flag
+for one year, so later page loads send nothing. `optIn()` removes the flag and
+creates a new anonymous ID. `disabled: true` turns the SDK off for one instance
+and does not touch browser storage.
+
+## Script tag
+
+```html
+<script src="https://api.example.com/sdk.js" data-write-key="site_public_key"
+  data-endpoint="https://api.example.com" data-cross-subdomain="true" defer></script>
+```
+
+`data-cross-subdomain="true"` sets `crossSubdomainCookies: true`. The instance
+is available as `window.untitledAnalytics`.
 
 ## Optional session replay
 
@@ -73,7 +149,6 @@ Pass `web-vitals` 5 or later to collect LCP, INP, CLS, FCP and TTFB. The SDK
 does not bundle the library or load it unless you supply it. One
 `web_vitals` event is queued on the first page hide, with the measured landing
 page, navigation-start timestamp, and only the metrics the browser reported.
-No analytics cookie or browser-stored visitor ID is added.
 
 ```ts
 import * as webVitals from 'web-vitals';
@@ -86,15 +161,17 @@ The `web-vitals` package is an application dependency when this option is used.
 This first port measures hard page loads, not separate SPA route changes.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
-include wallet, chain, or persistent anonymous identity code.
+include wallet or chain code. The anonymous ID, storage fallback and cookie
+domain logic are adapted from Formo's `generateAnonymousId`, `CookieStorage`
+and `cookiePolicy`.
 
 ## Local example and smoke check
 
 `pnpm example` builds the browser bundle and serves a self-contained example at
 `http://localhost:4317`. Its local collector records page and button events at
 `/captured`. `pnpm test:example` exercises the built ESM package and browser
-snippet against a local collector, including URL sanitization and browser
-storage checks. No Formono or cloud services are needed.
+snippet against a local collector, including URL sanitization, cookie and
+localStorage identity, and cross-subdomain cookie checks. No Formono or cloud services are needed.
 
 ## Ad and campaign attribution
 
@@ -109,32 +186,14 @@ Formo-style event context. Paid UTMs classify as `paid_utm` without a network ID
 
 A coherent campaign is carried **in memory** across SPA routes and subsequent
 track/identify calls, replaced when a new tagged acquisition arrives, and
-cleared at UTC midnight. Reloading or creating another instance clears it.
-Daily mode reads/writes no cookies or browser identity storage. Optional Attribution mode stores a consent-gated first-party UUID in localStorage. Page URLs omit query/fragment,
-and only bounded, sanitized allowlisted campaign parameters are sent.
+cleared at UTC midnight. Reloading or creating another instance clears it; the
+campaign itself is not written to browser storage. Page URLs omit
+query/fragment, and only bounded, sanitized allowlisted campaign parameters are
+sent.
 
 Conversion-credit models run in Analytics' Tinybird backend, not in the SDK.
-Anonymous journeys cannot join days; explicit `identify(userId, traits)` permits
-known-user joins. The backend supports first/last, last non-direct, linear,
-position-based and time decay; it does not capture impressions or ad spend.
-
-## Optional Attribution mode
-
-Daily mode is the default. Enable Attribution mode in project settings first (admin/MFA and processing acknowledgement), then supply a visitor-consent callback:
-
-```ts
-const analytics = createAnalytics({
-  writeKey: 'YOUR_SDK_WRITE_KEY',
-  endpoint: 'https://api.your-domain.com',
-  attribution: { consent: () => consentManager.analyticsAllowed() },
-});
-await analytics.ready;
-await analytics.identify('user_123', { stripe_customer_id: 'cus_123' });
-// or paddle_customer_id: 'ctm_123'
-```
-
-The callback comes from your app's consent manager. Only with both gates satisfied does the SDK access a project-scoped localStorage UUID, expiring after 90 days. Storage failure falls back to daily identity. No analytics cookies are set. Explicit user_id remains in memory and must be set again after authenticated reloads.
-
-On withdrawal, call `analytics.setConsent(false)` immediately; stored identity and persistent fields on queued events are removed. Alternatively the callback is rechecked on sends. `setConsent` explicitly overrides the callback until changed again, so use one mechanism consistently. Call `clearUserId()` on logout: it discards queued events and replaces the consented browser ID to prevent reattaching the next account. Consent withdrawal does not delete previously stored analytics history.
-
-Browser snippets can use `data-attribution="true"` together with `window.untitledAnalyticsConsent = () => ...`; omit both for daily mode. The collector ignores client anonymous_id unless the project allows it and consent is true. Never send private provider/webhook secrets to the browser.
+The persistent `anonymous_id` lets anonymous journeys join across days, and
+`identify(userId, traits)` links them to a known user. The backend supports
+first/last, last non-direct, linear, position-based and time decay; it does not
+capture impressions or ad spend. Never send private provider/webhook secrets to
+the browser; pass customer IDs such as `stripe_customer_id` as traits.
