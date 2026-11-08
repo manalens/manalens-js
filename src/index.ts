@@ -218,7 +218,7 @@ export class Analytics {
     const generation = this.identityGeneration;
     const optOutGeneration = this.optOutGeneration;
     try {
-      const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v1/events', {
+      const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v0/events', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-write-key': this.options.writeKey },
         body: JSON.stringify({ events: batch }),
