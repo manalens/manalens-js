@@ -24,7 +24,10 @@ Like Formo, cookies are scoped to the apex domain (`.example.com`) by default
 (`crossSubdomainCookies: true`), so `example.com` and `play.example.com` share
 one `anonymous_id`. Set `crossSubdomainCookies: false` for host-only cookies. The apex is found by probing which
 domain the browser accepts, so public suffixes such as `vercel.app` stay
-host-only. An existing host-only cookie on the current host (for example from
+host-only. With apex scope, these IDs are readable by every subdomain of the
+apex domain (and are sent in the `Cookie` header to every subdomain's servers),
+so use `crossSubdomainCookies: false` if you host untrusted content on a
+subdomain. An existing host-only cookie on the current host (for example from
 SDK 0.1 or from `crossSubdomainCookies: false`) migrates to the apex domain.
 
 By default identity is always on, like Formo. There is no remote

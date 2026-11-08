@@ -48,6 +48,8 @@ export class Analytics {
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
     if (typeof window === 'undefined' || this.options.disabled) return;
     // In consent mode, no cookie or localStorage is touched until setConsent(true).
+    // The opt-out flag is a strictly necessary preference: honour it in every mode.
+    this.optedOut = readOptOut(this.keys.optOut);
     if (this.identityAllowed()) this.loadIdentity();
     this.initialContext = this.captureContext();
     this.timer = setInterval(() => { void this.flush(); }, this.options.flushIntervalMs);
@@ -112,16 +114,15 @@ export class Analytics {
     this.clearIdentityStorage();
     this.userId = undefined;
     this.deferredIdentify = undefined;
-    this.pending = this.pending
-      .filter(event => event.type !== 'identify')
-      .map(({ anonymous_id: _a, session_id: _s, user_id: _u, ...event }) => event);
+    this.pending = stripIdentity(this.pending);
   }
 
   /** Forget the user ID, anonymous ID and session. The next event starts a fresh identity. */
   reset(): void {
     this.userId = undefined;
     this.deferredIdentify = undefined;
-    if (typeof window === 'undefined' || this.options.disabled || !this.identityAllowed()) return;
+    // Deletion needs no consent, so storage is cleared in every mode.
+    if (typeof window === 'undefined' || this.options.disabled) return;
     this.clearIdentityStorage();
   }
 
@@ -136,15 +137,16 @@ export class Analytics {
     this.pending = [];
     this.reset();
     this.optedOut = true;
-    if (typeof window !== 'undefined' && !this.options.disabled && this.identityAllowed()) writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies);
+    // Persisted in every mode: the opt-out is a strictly necessary preference.
+    if (typeof window !== 'undefined' && !this.options.disabled) writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies);
   }
 
   /** Resume tracking after optOut(). A new anonymous ID is created. */
   optIn(): void {
     this.optedOut = false;
-    if (typeof window === 'undefined' || this.options.disabled || !this.identityAllowed()) return;
+    if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
-    generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
+    if (this.identityAllowed()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
   }
 
   isOptedOut(): boolean { return this.optedOut; }
@@ -158,9 +160,6 @@ export class Analytics {
   }
 
   private loadIdentity(): void {
-    // An optOut() made before consent is kept and now persisted.
-    if (this.optedOut) { writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies); return; }
-    this.optedOut = readOptOut(this.keys.optOut);
     if (this.optedOut) return;
     // Create the persistent ID on first load, before any event is queued.
     generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
@@ -247,7 +246,10 @@ export class Analytics {
       if (!response.ok) throw new Error(`Analytics ingestion failed: ${response.status}`);
     } catch {
       // Retry in memory only; the queue is never written to browser storage.
-      this.pending.unshift(...batch);
+      // State may have changed while the request was in flight: drop the batch
+      // after optOut()/destroy(), and strip identity after setConsent(false).
+      if (!this.active()) return;
+      this.pending.unshift(...(this.identityAllowed() ? batch : stripIdentity(batch)));
       this.pending = this.pending.slice(0, 100);
     }
   }
@@ -263,6 +265,13 @@ export class Analytics {
     this.pending = [];
     this.stopped = true;
   }
+}
+
+/** Remove identity fields and drop identify events. */
+function stripIdentity(events: AnalyticsEvent[]): AnalyticsEvent[] {
+  return events
+    .filter(event => event.type !== 'identify')
+    .map(({ anonymous_id: _a, session_id: _s, user_id: _u, ...event }) => event);
 }
 
 export function createAnalytics(options: AnalyticsOptions): Analytics {
