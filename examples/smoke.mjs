@@ -543,3 +543,34 @@ test('consent mode before consent: reset() deletes stored identity and optOut() 
   sdk.setConsent(true); assert.equal(sdk.isOptedOut(), true, 'consent does not override opt-out');
   sdk.destroy();
 });
+
+for (const [name, change] of [
+  ['reset()', sdk => sdk.reset()],
+  ['setConsent(false) then setConsent(true)', sdk => { sdk.setConsent(false); sdk.setConsent(true); }],
+  ['optOut() then optIn()', sdk => { sdk.optOut(); sdk.optIn(); }],
+]) test(`a failed in-flight batch loses its old identity after ${name}`, async t => {
+  browser('https://generation.com/');
+  const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
+  const sdk = make({ writeKey: `ua_generation_${name.length}` });
+  try {
+    sdk.track('a');
+    const open = gate.holdNext();
+    const pendingIdentify = sdk.identify('user_g', { plan: 'pro' });
+    await new Promise(resolve => setImmediate(resolve));
+    const oldId = sent[0].body.events[0].anonymous_id;
+    change(sdk);
+    open(); await pendingIdentify;
+    sdk.track('b'); await sdk.flush();
+    const events = eventsOf(sent.slice(1));
+    assert.equal(JSON.stringify(sent.slice(1)).includes(oldId), false, 'old anonymous_id never re-sent');
+    assert.equal(events.some(event => event.type === 'identify'), false);
+    assert.equal(events.some(event => event.user_id === 'user_g'), false);
+    const b = events.find(event => event.event === 'b');
+    assert.match(b.anonymous_id, uuid); assert.notEqual(b.anonymous_id, oldId);
+    if (name === 'optOut() then optIn()') assert.equal(events.some(event => event.event === 'a'), false, 'opted-out batch is dropped');
+    else {
+      const a = events.find(event => event.event === 'a');
+      for (const field of ['anonymous_id', 'session_id', 'user_id']) assert.equal(a[field], undefined);
+    }
+  } finally { sdk.destroy(); }
+});
