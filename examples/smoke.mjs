@@ -176,7 +176,7 @@ test('identify works without a wallet, persists user_id, and reset clears identi
     await sdk.identify('user_123', { email: 'person@example.com', plan: 'pro', score: 7 });
     sdk.track('signed_in');
     await sdk.flush();
-    assert.ok(sent.every(item => item.url === 'https://collector.example/v1/events'));
+    assert.ok(sent.every(item => item.url === 'https://collector.example/v0/events'));
     const [before, identify, after] = eventsOf(sent);
     assert.equal(before.user_id, undefined);
     assert.equal(identify.type, 'identify');
@@ -254,7 +254,7 @@ test('a failed identify is retried with the same message and requests omit crede
   try {
     await sdk.identify('user', { plan: 'pro' });
     await sdk.flush();
-    assert.equal(sent.length, 2); assert.equal(sent[0].url, 'https://collector.example/v1/events'); assert.equal(sent[0].init.credentials, 'omit');
+    assert.equal(sent.length, 2); assert.equal(sent[0].url, 'https://collector.example/v0/events'); assert.equal(sent[0].init.credentials, 'omit');
     assert.equal(sent[0].body.events[0].message_id, sent[1].body.events[0].message_id);
     assert.equal(sent[1].body.events[0].context.page.url, 'https://example.com/pricing');
   } finally { sdk.destroy(); }

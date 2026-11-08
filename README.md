@@ -102,7 +102,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | Option | Default | Notes |
 | --- | --- | --- |
 | `writeKey` | required | Public write key for one site |
-| `endpoint` | required | Collector base URL |
+| `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview plus `popstate` / `ua:navigate` |
 | `batchSize` | `10` | Events per request |
@@ -118,12 +118,16 @@ analytics.track('signup_completed', { plan: 'starter' });
 
 ### Event envelope
 
-Each event in `POST /v1/events` (`{ events: [...] }`) has `type` (`page`,
+Each event in `POST /v0/events` (`{ events: [...] }`) has `type` (`page`,
 `track` or `identify`), `event` (track only), `message_id`,
 `channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
 `anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
 (identify only). In consent mode before consent, `anonymous_id`, `session_id`
 and `user_id` are absent.
+
+The API prefix is `/v0`. SDK builds before this change posted to `/v1/events`,
+which the Untitled Analytics API no longer serves; use a build that posts to
+`/v0/events` with an API that has the `/v0` routes.
 
 ## Identify logged-in users
 

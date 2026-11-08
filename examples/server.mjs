@@ -10,7 +10,7 @@ const server = createServer(async (request, response) => {
   response.setHeader('access-control-allow-headers', 'content-type,x-write-key');
   response.setHeader('access-control-allow-methods', 'POST,OPTIONS');
   if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
-  if (request.url === '/v1/events' && request.method === 'POST') {
+  if (request.url === '/v0/events' && request.method === 'POST') {
     let body = '';
     for await (const chunk of request) body += chunk;
     try {
