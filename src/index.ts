@@ -99,8 +99,9 @@ export class Analytics {
     if (this.timezoneExcluded) { this.clearIdentityStorage(); return; }
     // On an excluded host or path, no identity is written until an allowed page.
     if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
-    // Record the landing page's acquisition touch before any navigation.
-    this.captureContext();
+    // Record the landing page's acquisition touch before any navigation
+    // (not from an excluded page, whose campaign would carry to later events).
+    if (!this.pageExcluded()) this.captureContext();
     this.timer = setInterval(() => { void this.flushDue(); }, this.options.flushIntervalMs);
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
@@ -139,7 +140,8 @@ export class Analytics {
     this.userId = userId;
     if (!this.active()) return;
     if (!this.identityAllowed()) { this.deferredIdentify = traits; return; }
-    if (this.pageExcluded()) return; // kept in memory; nothing written or sent here
+    // On an excluded page: nothing written or sent; sent with the first event on an allowed page.
+    if (this.pageExcluded()) { this.deferredIdentify = traits; return; }
     writeUserId(this.keys.userId, userId, this.options.crossSubdomainCookies);
     this.enqueue('identify', undefined, {}, undefined, undefined, traits);
     await this.flush();
@@ -159,6 +161,8 @@ export class Analytics {
       this.loadIdentity();
       const traits = this.deferredIdentify;
       this.deferredIdentify = undefined;
+      // On an excluded page, keep the identify until the visitor reaches an allowed page.
+      if (traits && this.pageExcluded()) { this.deferredIdentify = traits; return; }
       if (traits && this.userId && this.active()) {
         writeUserId(this.keys.userId, this.userId, this.options.crossSubdomainCookies);
         this.enqueue('identify', undefined, {}, undefined, undefined, traits);
@@ -248,6 +252,13 @@ export class Analytics {
 
   private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): void {
     if (!this.active() || this.pageExcluded()) return;
+    // An identify held back on an excluded page goes out first, on this allowed page.
+    if (type !== 'identify' && this.deferredIdentify && this.userId && this.identityAllowed()) {
+      const held = this.deferredIdentify;
+      this.deferredIdentify = undefined;
+      writeUserId(this.keys.userId, this.userId, this.options.crossSubdomainCookies);
+      this.enqueue('identify', undefined, {}, undefined, undefined, held);
+    }
     const cross = this.options.crossSubdomainCookies;
     const payload: AnalyticsEvent = {
       type,
