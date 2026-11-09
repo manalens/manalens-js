@@ -2,6 +2,7 @@ import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
 import { storageKey } from './storage';
+import { hostExcluded, pathExcluded, timezoneExcluded } from './tracking';
 import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 
 /** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
@@ -9,6 +10,7 @@ export const LIBRARY_NAME = 'Untitled Analytics Web SDK';
 export const LIBRARY_VERSION = '0.4.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
+export type { TrackingOptions } from './tracking';
 
 type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
@@ -33,6 +35,7 @@ export class Analytics {
   /** Bumped by optOut(); batches in flight across an opt-out are never re-sent. */
   private optOutGeneration = 0;
   private optedOut = false;
+  private timezoneExcluded = false;
   private userId?: string;
   /** Explicit setConsent() value; undefined means "use requireConsent". */
   private consent?: boolean;
@@ -90,7 +93,12 @@ export class Analytics {
     // In consent mode, no cookie or localStorage is touched until setConsent(true).
     // The opt-out flag is a strictly necessary preference: honour it in every mode.
     this.optedOut = readOptOut(this.keys.optOut);
-    if (this.identityAllowed()) this.loadIdentity();
+    // An excluded timezone is visitor-level: nothing is sent, nothing stored,
+    // and an existing identity is deleted (deletion needs no consent).
+    this.timezoneExcluded = timezoneExcluded(this.options.tracking?.excludeTimezones);
+    if (this.timezoneExcluded) { this.clearIdentityStorage(); return; }
+    // On an excluded host or path, no identity is written until an allowed page.
+    if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation.
     this.captureContext();
     this.timer = setInterval(() => { void this.flushDue(); }, this.options.flushIntervalMs);
@@ -131,6 +139,7 @@ export class Analytics {
     this.userId = userId;
     if (!this.active()) return;
     if (!this.identityAllowed()) { this.deferredIdentify = traits; return; }
+    if (this.pageExcluded()) return; // kept in memory; nothing written or sent here
     writeUserId(this.keys.userId, userId, this.options.crossSubdomainCookies);
     this.enqueue('identify', undefined, {}, undefined, undefined, traits);
     await this.flush();
@@ -195,13 +204,13 @@ export class Analytics {
     this.optedOut = false;
     if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
-    if (this.identityAllowed()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
+    if (this.identityAllowed() && !this.timezoneExcluded && !this.pageExcluded()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
   }
 
   isOptedOut(): boolean { return this.optedOut; }
   getUserId(): string | undefined { return this.userId; }
   getAnonymousId(): string | undefined {
-    return this.active() && this.identityAllowed() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
+    return this.active() && this.identityAllowed() && !this.pageExcluded() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
   }
 
   private identityAllowed(): boolean {
@@ -209,14 +218,21 @@ export class Analytics {
   }
 
   private loadIdentity(): void {
-    if (this.optedOut) return;
+    if (this.optedOut || this.timezoneExcluded || this.pageExcluded()) return;
     // Create the persistent ID on first load, before any event is queued.
     generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
     this.userId ||= readUserId(this.keys.userId);
   }
 
   private active(): boolean {
-    return !this.stopped && !this.options.disabled && !this.optedOut && typeof window !== 'undefined';
+    return !this.stopped && !this.options.disabled && !this.optedOut && !this.timezoneExcluded && typeof window !== 'undefined';
+  }
+
+  /** The current host or path is in tracking.excludeHosts / excludePaths. Checked per event. */
+  private pageExcluded(): boolean {
+    const tracking = this.options.tracking;
+    if (!tracking || typeof location === 'undefined') return false;
+    return hostExcluded(location.hostname, tracking.excludeHosts) || pathExcluded(location.pathname, tracking.excludePaths);
   }
 
   /** Carry one coherent acquisition touch in memory for this page lifetime. */
@@ -231,7 +247,7 @@ export class Analytics {
   }
 
   private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): void {
-    if (!this.active()) return;
+    if (!this.active() || this.pageExcluded()) return;
     const cross = this.options.crossSubdomainCookies;
     const payload: AnalyticsEvent = {
       type,
