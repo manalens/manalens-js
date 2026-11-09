@@ -109,13 +109,13 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `flushIntervalMs` | `5000` | Flush timer |
 | `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
 | `maxQueueSize` | `512000` | Queue limit in bytes (200 to 500 KB). The oldest events are dropped first. |
+| `requireConsent` | `false` | Consent mode; see below |
+| `disabled` | `false` | No events and no browser storage |
 
 **Delivery.** Events wait in memory (never in browser storage) and are sent in
 batches. After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
 A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
-| `requireConsent` | `false` | Consent mode; see below |
-| `disabled` | `false` | No events and no browser storage |
 
 ### Methods
 
