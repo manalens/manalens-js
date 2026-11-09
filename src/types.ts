@@ -55,6 +55,15 @@ export interface AnalyticsOptions {
   autoPageviews?: boolean;
   batchSize?: number;
   flushIntervalMs?: number;
+  /**
+   * How many times a batch is sent again after a server error (408, 429 or
+   * 5xx), default 3, from 0 to 10. Network errors (offline) do not count: the
+   * events wait in memory until the network is back. Other 4xx responses are
+   * not retried.
+   */
+  retryCount?: number;
+  /** Queue limit in bytes (serialized events), default and maximum 500 KB, minimum 200. The oldest events are dropped first. */
+  maxQueueSize?: number;
   /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
 }
