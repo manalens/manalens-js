@@ -616,3 +616,100 @@ test('autoPageviews: false does not wrap history', async t => {
   const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false });
   try { assert.equal(history.pushState, original); } finally { sdk.destroy(); delete globalThis.history; }
 });
+
+const response = (status, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: name => headers[name.toLowerCase()] ?? null } });
+
+test('retry: a refused batch (400, 401, 403) is dropped, not sent again', async t => {
+  for (const status of [400, 401, 403, 413]) {
+    browser('https://example.com/');
+    const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(sent.length === 1 ? status : 202); });
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+    try {
+      sdk.track('refused'); await sdk.flush(); await sdk.flush();
+      assert.equal(sent.length, 1, `status ${status}`);
+      sdk.track('next'); await sdk.flush();
+      assert.deepEqual(sent[1].events.map(event => event.event), ['next'], `status ${status}`);
+    } finally { sdk.destroy(); }
+  }
+});
+
+test('retry: 408, 429 and 5xx are sent again at most retryCount times', async t => {
+  for (const status of [408, 429, 500, 503]) {
+    browser('https://example.com/');
+    const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(status); });
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 2 });
+    try {
+      sdk.track('flaky');
+      for (let i = 0; i < 5; i++) await sdk.flush();
+      assert.equal(sent.length, 3, `status ${status}: the first send and 2 retries`);
+      assert.equal(new Set(sent.map(body => body.events[0].message_id)).size, 1);
+    } finally { sdk.destroy(); }
+  }
+});
+
+test('retry: network errors (offline) are not counted; the events wait until the network is back', async t => {
+  browser('https://example.com/');
+  let offline = 6; const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); if (offline-- > 0) throw new TypeError('Failed to fetch'); return response(202); });
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 1 });
+  try {
+    sdk.track('offline_event');
+    for (let i = 0; i < 8; i++) await sdk.flush();
+    assert.equal(sent.length, 7);
+    assert.deepEqual(sent.at(-1).events.map(event => event.event), ['offline_event']);
+  } finally { sdk.destroy(); }
+});
+
+test('backoff: after a failure, a full batch waits; flush() sends now; a success resets the backoff', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-09T00:00:00Z') });
+  browser('https://example.com/');
+  let fail = true; const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(fail ? 503 : 202); });
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
+  try {
+    sdk.track('a'); await tick(); // full batch: sent, 503
+    assert.equal(sent.length, 1);
+    sdk.track('b'); await tick(); // full batch during backoff: waits
+    assert.equal(sent.length, 1);
+    t.mock.timers.tick(1300); // past the first backoff (1 s + up to 25%)
+    fail = false;
+    sdk.track('c'); await tick();
+    assert.equal(sent.length, 2);
+    await sdk.flush(); await sdk.flush(); // explicit flush ignores backoff
+    assert.deepEqual(sent.flatMap(body => body.events.map(event => event.event)).sort(), ['a', 'a', 'b', 'c'].sort());
+  } finally { sdk.destroy(); }
+});
+
+test('backoff: Retry-After on 429 is honoured, up to 60 s', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-09T00:00:00Z') });
+  browser('https://example.com/');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return sent.length === 1 ? response(429, { 'retry-after': '45' }) : response(202); });
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
+  try {
+    sdk.track('a'); await tick();
+    t.mock.timers.tick(40_000);
+    sdk.track('b'); await tick();
+    assert.equal(sent.length, 1, 'still inside Retry-After');
+    t.mock.timers.tick(6_000);
+    sdk.track('c'); await tick();
+    assert.equal(sent.length, 2);
+  } finally { sdk.destroy(); }
+});
+
+test('maxQueueSize: the queue stays under the byte limit and drops the oldest events first', async t => {
+  browser('https://example.com/');
+  t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch'); });
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1000, maxQueueSize: 4000 });
+  const sent = [];
+  try {
+    for (let i = 0; i < 20; i++) sdk.track(`event_${i}`, { note: 'x'.repeat(300) });
+    t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(202); });
+    await sdk.flush();
+    const names = sent[0].events.map(event => event.event);
+    assert.ok(names.length < 20 && names.length > 1, `kept ${names.length}`);
+    assert.equal(names.at(-1), 'event_19', 'the newest event is kept');
+    assert.equal(names[0], `event_${20 - names.length}`, 'the oldest events were dropped');
+    assert.ok(new TextEncoder().encode(JSON.stringify(sent[0].events)).byteLength <= 4000 + names.length);
+  } finally { sdk.destroy(); }
+});
