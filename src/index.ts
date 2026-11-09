@@ -10,7 +10,17 @@ export const LIBRARY_VERSION = '0.4.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 
-type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies'>>;
+type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
+
+/** Queue limits, as in getformo/sdk's EventQueue. */
+const MAX_QUEUE_BYTES = 500 * 1024;
+const MIN_QUEUE_BYTES = 200;
+/** Backoff after a failed send: 1 s, 2 s, 4 s ... up to 30 s, plus up to 25% jitter. Retry-After is honoured up to 60 s. */
+const BASE_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30_000;
+const MAX_RETRY_AFTER_MS = 60_000;
+const clamp = (value: number | undefined, min: number, max: number, fallback: number) =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
 
 export class Analytics {
   private readonly options: ResolvedOptions;
@@ -36,6 +46,13 @@ export class Analytics {
     if (document.visibilityState === 'hidden') void this.flush(true);
   };
   private readonly onNavigation = () => { this.page(); };
+  /** Server-error attempts per message_id (network errors are not counted). */
+  private readonly attempts = new Map<string, number>();
+  /** Serialized size per queued event, computed once. */
+  private readonly sizes = new WeakMap<AnalyticsEvent, number>();
+  /** Scheduled flushes wait until this time after a failure (backoff). */
+  private retryAt = 0;
+  private backoffStep = 0;
   /** The pathname of the last pageview sent for a pushState / replaceState navigation. */
   private historyPathname?: string;
   private historyTimer?: ReturnType<typeof setTimeout>;
@@ -64,6 +81,8 @@ export class Analytics {
       disabled: false,
       ...options,
       crossSubdomainCookies: options.crossSubdomainCookies !== false,
+      retryCount: clamp(options.retryCount, 0, 10, 3),
+      maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };
     const key = (name: string) => storageKey(this.options.writeKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
@@ -74,7 +93,7 @@ export class Analytics {
     if (this.identityAllowed()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation.
     this.captureContext();
-    this.timer = setInterval(() => { void this.flush(); }, this.options.flushIntervalMs);
+    this.timer = setInterval(() => { void this.flushDue(); }, this.options.flushIntervalMs);
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
     if (this.options.autoPageviews) {
@@ -231,14 +250,57 @@ export class Analytics {
       ...(type === 'identify' ? { traits } : {}),
     };
     this.pending.push(payload);
-    if (this.pending.length >= this.options.batchSize) void this.flush();
+    this.limitQueue();
+    if (this.pending.length >= this.options.batchSize) void this.flushDue();
   }
 
+  private size(event: AnalyticsEvent): number {
+    let size = this.sizes.get(event);
+    if (size === undefined) {
+      const json = JSON.stringify(event);
+      // UTF-8 bytes; the UTF-16 length is a close fallback where TextEncoder is missing.
+      size = typeof TextEncoder === 'undefined' ? json.length : new TextEncoder().encode(json).byteLength;
+      this.sizes.set(event, size);
+    }
+    return size;
+  }
+
+  /** Keep the queue under maxQueueSize bytes; drop the oldest events first (never the newest one). */
+  private limitQueue(): void {
+    let total = this.pending.reduce((sum, event) => sum + this.size(event), 0);
+    while (total > this.options.maxQueueSize && this.pending.length > 1) {
+      const dropped = this.pending.shift()!;
+      total -= this.size(dropped);
+      this.attempts.delete(dropped.message_id);
+    }
+  }
+
+  /** The timer and a full batch flush only when no backoff is pending. */
+  private flushDue(): Promise<void> {
+    return Date.now() < this.retryAt ? Promise.resolve() : this.flush();
+  }
+
+  /** Wait before the next scheduled flush: exponential backoff with jitter, or Retry-After when longer. */
+  private backOff(retryAfterHeader?: string | null): void {
+    const exponential = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** this.backoffStep);
+    this.backoffStep++;
+    let delay = exponential + Math.random() * exponential * 0.25;
+    const retryAfter = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    if (Number.isFinite(retryAfter) && retryAfter > 0) delay = Math.max(delay, Math.min(MAX_RETRY_AFTER_MS, retryAfter * 1000));
+    this.retryAt = Date.now() + delay;
+  }
+
+  /**
+   * Send one batch now. A call to flush() ignores the backoff; the timer and a
+   * full batch wait for it. Network errors and 408 / 429 / 5xx keep the batch
+   * in memory (server errors at most retryCount times); other 4xx drop it.
+   */
   async flush(keepalive = false): Promise<void> {
     if (!this.active() || this.pending.length === 0) return;
     const batch = this.pending.splice(0, this.options.batchSize);
     const generation = this.identityGeneration;
     const optOutGeneration = this.optOutGeneration;
+    let retry: AnalyticsEvent[];
     try {
       const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v0/events', {
         method: 'POST',
@@ -247,17 +309,32 @@ export class Analytics {
         credentials: 'omit',
         keepalive,
       });
-      if (!response.ok) throw new Error(`Analytics ingestion failed: ${response.status}`);
+      if (response.ok || !retryableStatus(response.status)) {
+        // Accepted, or refused for good (400, 401, 403, 413 ...): sending it again cannot help.
+        for (const event of batch) this.attempts.delete(event.message_id);
+        if (response.ok) { this.backoffStep = 0; this.retryAt = 0; }
+        return;
+      }
+      retry = batch.filter(event => {
+        const attempts = (this.attempts.get(event.message_id) ?? 0) + 1;
+        if (attempts > this.options.retryCount) { this.attempts.delete(event.message_id); return false; }
+        this.attempts.set(event.message_id, attempts);
+        return true;
+      });
+      this.backOff(response.headers?.get?.('retry-after'));
     } catch {
-      // Retry in memory only; the queue is never written to browser storage.
-      // State may have changed while the request was in flight: drop the batch
-      // after optOut()/destroy(); strip identity after reset(), setConsent(false)
-      // or any other identity change, even if consent was granted again since.
-      if (!this.active() || optOutGeneration !== this.optOutGeneration) return;
-      const stale = generation !== this.identityGeneration || !this.identityAllowed();
-      this.pending.unshift(...(stale ? stripIdentity(batch) : batch));
-      this.pending = this.pending.slice(0, 100);
+      // Network error (offline, DNS, CORS): not counted, the events wait.
+      retry = batch;
+      this.backOff();
     }
+    // Retry in memory only; the queue is never written to browser storage.
+    // State may have changed while the request was in flight: drop the batch
+    // after optOut()/destroy(); strip identity after reset(), setConsent(false)
+    // or any other identity change, even if consent was granted again since.
+    if (!this.active() || optOutGeneration !== this.optOutGeneration) { for (const event of batch) this.attempts.delete(event.message_id); return; }
+    const stale = generation !== this.identityGeneration || !this.identityAllowed();
+    this.pending.unshift(...(stale ? stripIdentity(retry) : retry));
+    this.limitQueue();
   }
 
   destroy(): void {
@@ -272,8 +349,14 @@ export class Analytics {
       window.removeEventListener('ua:navigate', this.onNavigation);
     }
     this.pending = [];
+    this.attempts.clear();
     this.stopped = true;
   }
+}
+
+/** 408 Request Timeout, 429 Too Many Requests and 5xx are worth another try. */
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
 /** Dispatched on window after history.pushState / replaceState. */
