@@ -713,3 +713,60 @@ test('maxQueueSize: the queue stays under the byte limit and drops the oldest ev
     assert.ok(new TextEncoder().encode(JSON.stringify(sent[0].events)).byteLength <= 4000 + names.length);
   } finally { sdk.destroy(); }
 });
+
+test('tracking.excludeHosts: exact and *. hosts send nothing and write no identity', async t => {
+  for (const [url, hosts] of [['https://staging.example.com/', ['STAGING.example.com']], ['https://app-git-x.vercel.app/', ['*.vercel.app']]]) {
+    const { jar } = browser(url);
+    const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: hosts } });
+    try {
+      sdk.track('signup'); await sdk.identify('user-1'); await sdk.flush();
+      assert.equal(sent.length, 0, url);
+      assert.equal(jar.writes.length, 0, `${url}: no cookie written`);
+      assert.equal(sdk.getAnonymousId(), undefined);
+    } finally { sdk.destroy(); }
+  }
+  // The wildcard does not match the bare domain or a look-alike.
+  for (const url of ['https://vercel.app/', 'https://evilvercel.app/']) {
+    browser(url); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: ['*.vercel.app'] } });
+    try { await sdk.flush(); assert.equal(eventsOf(sent).length, 1, url); } finally { sdk.destroy(); }
+  }
+});
+
+test('tracking.excludePaths: exact and /* prefix paths, checked per event as a SPA navigates', async t => {
+  const { window } = browser('https://example.com/admin/users');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*', '/checkout/'] } });
+  try {
+    sdk.track('admin_click');
+    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
+    sdk.track('pricing_click');
+    globalThis.location = new URL('https://example.com/checkout'); window.dispatchEvent(new Event('popstate'));
+    sdk.track('checkout_click');
+    globalThis.location = new URL('https://example.com/administrator'); window.dispatchEvent(new Event('popstate'));
+    await sdk.flush();
+    const events = eventsOf(sent).map(event => event.type === 'page' ? `page ${event.context.page.path}` : event.event);
+    assert.deepEqual(events, ['page /pricing', 'pricing_click', 'page /administrator']);
+    assert.match(eventsOf(sent)[0].anonymous_id, uuid, 'identity starts on the first allowed page');
+  } finally { sdk.destroy(); }
+});
+
+test('tracking.excludeTimezones: no events, no storage, and an existing identity is deleted', async t => {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { jar } = browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const first = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  first.destroy();
+  assert.ok(jar.find('ua_').some(cookie => cookie.name.endsWith('_anonymous-id')), 'identity from an earlier visit');
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus', zone.toUpperCase()] } });
+  try {
+    sdk.track('x'); await sdk.identify('u'); sdk.optIn(); await sdk.flush();
+    assert.equal(sent.length, 0);
+    assert.equal(jar.find('ua_').some(cookie => cookie.name.endsWith('_anonymous-id')), false, 'existing identity deleted');
+    assert.equal(sdk.getAnonymousId(), undefined);
+  } finally { sdk.destroy(); }
+  // Another timezone in the list does not exclude this visitor.
+  const other = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus'] } });
+  try { await other.flush(); assert.equal(eventsOf(sent).length, 1); } finally { other.destroy(); }
+});

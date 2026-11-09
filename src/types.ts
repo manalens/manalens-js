@@ -1,3 +1,4 @@
+import type { TrackingOptions } from './tracking';
 import type { acquisitionKeys } from './attribution-contract';
 export type Traits = Record<string, string | number | boolean | null>;
 
@@ -64,6 +65,8 @@ export interface AnalyticsOptions {
   retryCount?: number;
   /** Queue limit in bytes (serialized events), default and maximum 500 KB, minimum 200. The oldest events are dropped first. */
   maxQueueSize?: number;
+  /** Hosts, paths and timezones where nothing is sent. See TrackingOptions. */
+  tracking?: TrackingOptions;
   /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
 }

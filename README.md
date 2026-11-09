@@ -110,12 +110,41 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
 | `maxQueueSize` | `512000` | Queue limit in bytes (200 to 500 KB). The oldest events are dropped first. |
 | `requireConsent` | `false` | Consent mode; see below |
+| `tracking` | none | `{ excludeHosts, excludePaths, excludeTimezones }`; see [Tracking rules](#tracking-rules) |
 | `disabled` | `false` | No events and no browser storage |
 
 **Delivery.** Events wait in memory (never in browser storage) and are sent in
 batches. After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
 A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
+
+### Tracking rules
+
+Send nothing from some hosts, paths or timezones (adapted from Formo's SDK):
+
+```js
+createAnalytics({
+  writeKey, endpoint,
+  tracking: {
+    excludeHosts: ['localhost', 'staging.example.com', '*.vercel.app'],
+    excludePaths: ['/admin/*', '/internal'],
+    excludeTimezones: ['Europe/London'],
+  },
+});
+```
+
+- `excludeHosts`: exact hostnames, or `*.` for every subdomain (`*.vercel.app`
+  does not match `vercel.app` itself). Case-insensitive.
+- `excludePaths`: exact paths, or a prefix ending in `/*` (`/admin/*` matches
+  `/admin` and every path under it). Checked for each event, so a SPA that
+  leaves an excluded path sends again.
+- On an excluded host or path, no event is sent and no identity cookie is
+  written. An identity written on an allowed page stays.
+- `excludeTimezones`: IANA names, case-insensitive. A visitor in one of them is
+  not tracked at all: no events, no browser storage, and an existing identity
+  is deleted. This is best effort; a visitor can change the timezone. For
+  strict geo rules, filter at the collector.
+- Unlike Formo's SDK, `localhost` is tracked unless you exclude it.
 
 ### Methods
 
