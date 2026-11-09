@@ -554,3 +554,65 @@ for (const [name, change] of [
     }
   } finally { sdk.destroy(); }
 });
+
+/** A fake History whose pushState / replaceState move globalThis.location. */
+function fakeHistory() {
+  const calls = [];
+  const move = (url) => { if (url !== undefined && url !== null) globalThis.location = new URL(String(url), globalThis.location.href); };
+  return { calls, pushState(state, title, url) { calls.push(['push', String(url)]); move(url); }, replaceState(state, title, url) { calls.push(['replace', String(url)]); move(url); } };
+}
+const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+
+test('SPA navigation: pushState sends a pageview with the new title; query-only and same-URL replaceState send none', async t => {
+  const { document } = browser('https://example.com/');
+  const history = fakeHistory(); globalThis.history = history;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    history.replaceState(null, '', 'https://example.com/'); // hydration: same URL
+    history.pushState(null, '', '/docs?token=private');
+    document.title = 'Docs'; // routers set the title after pushState
+    await tick();
+    history.replaceState(null, '', '/docs?tab=api'); // query-only change
+    await tick();
+    history.pushState(null, '', '/pricing'); document.title = 'Pricing';
+    await tick();
+    await sdk.flush();
+    const pages = eventsOf(sent).filter(event => event.type === 'page');
+    assert.deepEqual(pages.map(event => [event.context.page.path, event.context.page.title]), [['/', 'Pricing'], ['/docs', 'Docs'], ['/pricing', 'Pricing']]);
+    assert.equal(pages[1].context.page.url, 'https://example.com/docs');
+    // The wrapper keeps the original behavior (the URL moved).
+    assert.equal(globalThis.location.pathname, '/pricing');
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('SPA navigation: the history wrapper is installed once for several instances, and destroy() stops pageviews', async t => {
+  browser('https://example.com/');
+  const history = fakeHistory(); const originalPush = history.pushState; globalThis.history = history;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const first = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const wrapped = history.pushState;
+  assert.notEqual(wrapped, originalPush);
+  const second = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    assert.equal(history.pushState, wrapped, 'a second instance does not wrap again');
+    first.destroy(); // React Strict Mode: the first instance is torn down
+    history.pushState(null, '', '/next');
+    history.pushState(null, '', '/next'); // a repeated push to the same path
+    await tick();
+    await second.flush();
+    const pages = eventsOf(sent).filter(event => event.type === 'page').map(event => event.context.page.path);
+    assert.deepEqual(pages, ['/', '/next'], 'one pageview per path change, from the live instance only');
+    second.destroy();
+    history.pushState(null, '', '/after-destroy'); await tick();
+    assert.equal(eventsOf(sent).some(event => event.context?.page?.path === '/after-destroy'), false);
+  } finally { first.destroy(); second.destroy(); delete globalThis.history; }
+});
+
+test('autoPageviews: false does not wrap history', async t => {
+  browser('https://example.com/');
+  const history = fakeHistory(); const original = history.pushState; globalThis.history = history;
+  t.mock.method(globalThis, 'fetch', collector([]));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false });
+  try { assert.equal(history.pushState, original); } finally { sdk.destroy(); delete globalThis.history; }
+});
