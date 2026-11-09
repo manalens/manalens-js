@@ -823,3 +823,19 @@ test('consent on an excluded page holds the identify until an allowed page', asy
     assert.equal(events[0].type, 'identify'); assert.equal(events[0].user_id, 'user-7');
   } finally { sdk.destroy(); }
 });
+
+test('identify() while opted out is a no-op, and optIn() starts without a user ID', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+  try {
+    await sdk.identify('before');
+    sdk.optOut();
+    await sdk.identify('during-opt-out');
+    assert.equal(sdk.getUserId(), undefined);
+    sdk.optIn();
+    sdk.track('after_opt_in'); await sdk.flush();
+    const after = eventsOf(sent).find(event => event.event === 'after_opt_in');
+    assert.equal(after.user_id, undefined);
+  } finally { sdk.destroy(); }
+});

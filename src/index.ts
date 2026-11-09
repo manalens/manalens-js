@@ -137,8 +137,9 @@ export class Analytics {
   async identify(userId: string, traits: Traits = {}): Promise<void> {
     if (typeof userId !== 'string' || !userId || userId.length > 255) throw new Error('User ID must be 1–255 characters');
     if (JSON.stringify(traits).length > 2048) throw new Error('User traits must be under 2KB');
-    this.userId = userId;
+    // Opted out (or disabled): a complete no-op, so no user ID survives to a later optIn().
     if (!this.active()) return;
+    this.userId = userId;
     if (!this.identityAllowed()) { this.deferredIdentify = traits; return; }
     // On an excluded page: nothing written or sent; sent with the first event on an allowed page.
     if (this.pageExcluded()) { this.deferredIdentify = traits; return; }
@@ -206,6 +207,9 @@ export class Analytics {
   optIn(): void {
     this.identityGeneration++;
     this.optedOut = false;
+    // Start clean: nothing from before or during the opt-out is attached to new events.
+    this.userId = undefined;
+    this.deferredIdentify = undefined;
     if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
     if (this.identityAllowed() && !this.timezoneExcluded && !this.pageExcluded()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
