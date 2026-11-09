@@ -144,6 +144,11 @@ createAnalytics({
   not tracked at all: no events, no browser storage, and an existing identity
   is deleted. This is best effort; a visitor can change the timezone. For
   strict geo rules, filter at the collector.
+- Hosts are compared in lowercase punycode without a trailing dot, and paths
+  after decoding escapes and collapsing repeated slashes. Timezone names match
+  their renamed forms (for example `Asia/Kolkata` and `Asia/Calcutta`).
+- An `identify()` on an excluded page is held and sent with the first event on
+  an allowed page. A campaign from an excluded landing page is not carried.
 - Unlike Formo's SDK, `localhost` is tracked unless you exclude it.
 
 ### Methods

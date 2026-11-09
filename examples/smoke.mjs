@@ -770,3 +770,72 @@ test('tracking.excludeTimezones: no events, no storage, and an existing identity
   const other = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus'] } });
   try { await other.flush(); assert.equal(eventsOf(sent).length, 1); } finally { other.destroy(); }
 });
+
+test('tracking rules: trailing dots, IDN hosts, double slashes, escapes and timezone aliases still match', async t => {
+  const cases = [
+    ['https://staging.example.com./', { excludeHosts: ['staging.example.com'] }],
+    ['https://xn--bcher-kva.example/', { excludeHosts: ['bücher.example'] }],
+    ['https://preview.münchen.example/', { excludeHosts: ['*.münchen.example.'] }],
+    ['https://example.com//admin//users', { excludePaths: ['/admin/*'] }],
+    ['https://example.com/%61dmin', { excludePaths: ['/admin'] }],
+  ];
+  for (const [url, tracking] of cases) {
+    browser(url); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking });
+    try { sdk.track('x'); await sdk.flush(); assert.equal(sent.length, 0, url); } finally { sdk.destroy(); }
+  }
+  // A visitor in Asia/Calcutta is excluded by Asia/Kolkata, and the reverse.
+  const original = Intl.DateTimeFormat;
+  for (const [visitor, rule] of [['Asia/Calcutta', 'Asia/Kolkata'], ['Asia/Kolkata', 'Asia/Calcutta'], ['Europe/Kiev', 'Europe/Kyiv'], ['Etc/UTC', 'UTC']]) {
+    t.mock.method(Intl, 'DateTimeFormat', function (...args) { const real = new original(...args); return args.length ? real : { resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: visitor }) }; });
+    browser('https://example.com/'); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: [rule] } });
+    try { await sdk.flush(); assert.equal(sent.length, 0, `${visitor} vs ${rule}`); } finally { sdk.destroy(); Intl.DateTimeFormat.mock?.restore?.(); t.mock.restoreAll(); }
+  }
+});
+
+test('tracking rules: an excluded landing page carries no campaign, and a held identify is sent on the next allowed page', async t => {
+  const { window } = browser('https://example.com/admin?utm_source=internal');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*'] } });
+  try {
+    await sdk.identify('user-9', { plan: 'pro' });
+    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(events.map(event => event.type), ['identify', 'page']);
+    assert.equal(events[0].user_id, 'user-9'); assert.deepEqual(events[0].traits, { plan: 'pro' });
+    assert.equal(events[1].context.utm_source, undefined, 'no campaign from the excluded page');
+  } finally { sdk.destroy(); }
+});
+
+test('consent on an excluded page holds the identify until an allowed page', async t => {
+  const { window, jar } = browser('https://example.com/admin');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, requireConsent: true, tracking: { excludePaths: ['/admin'] } });
+  try {
+    await sdk.identify('user-7', { plan: 'team' });
+    sdk.setConsent(true);
+    assert.equal(jar.find('ua_').some(cookie => cookie.name.endsWith('_user-id')), false, 'no user cookie on the excluded page');
+    globalThis.location = new URL('https://example.com/home'); window.dispatchEvent(new Event('popstate'));
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.equal(events[0].type, 'identify'); assert.equal(events[0].user_id, 'user-7');
+  } finally { sdk.destroy(); }
+});
+
+test('identify() while opted out is a no-op, and optIn() starts without a user ID', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+  try {
+    await sdk.identify('before');
+    sdk.optOut();
+    await sdk.identify('during-opt-out');
+    assert.equal(sdk.getUserId(), undefined);
+    sdk.optIn();
+    sdk.track('after_opt_in'); await sdk.flush();
+    const after = eventsOf(sent).find(event => event.event === 'after_opt_in');
+    assert.equal(after.user_id, undefined);
+  } finally { sdk.destroy(); }
+});
