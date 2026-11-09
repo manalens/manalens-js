@@ -36,6 +36,24 @@ export class Analytics {
     if (document.visibilityState === 'hidden') void this.flush(true);
   };
   private readonly onNavigation = () => { this.page(); };
+  /** The pathname of the last pageview sent for a pushState / replaceState navigation. */
+  private historyPathname?: string;
+  private historyTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * pushState / replaceState (SPA routers). Wait one tick so the router can set
+   * the new document.title, then send a pageview only when the path changed:
+   * a query-only replaceState (filters, tabs) and a same-URL replaceState on
+   * hydration send none.
+   */
+  private readonly onHistoryChange = () => {
+    if (this.historyTimer) clearTimeout(this.historyTimer);
+    this.historyTimer = setTimeout(() => {
+      this.historyTimer = undefined;
+      if (this.stopped || location.pathname === this.historyPathname) return;
+      this.historyPathname = location.pathname;
+      this.page();
+    }, 0);
+  };
 
   constructor(options: AnalyticsOptions) {
     if (!options.writeKey || !options.endpoint) throw new Error('writeKey and endpoint are required');
@@ -61,8 +79,11 @@ export class Analytics {
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
     if (this.options.autoPageviews) {
       this.page();
+      this.historyPathname = location.pathname;
+      installHistoryHooksOnce();
       window.addEventListener('popstate', this.onNavigation);
       window.addEventListener('ua:navigate', this.onNavigation);
+      window.addEventListener(HISTORY_EVENT, this.onHistoryChange);
     }
   }
 
@@ -71,6 +92,7 @@ export class Analytics {
     const path = `${location.pathname}${location.search}`;
     if (path === this.previousPath && Object.keys(properties).length === 0) return;
     this.previousPath = path;
+    this.historyPathname = location.pathname;
     this.enqueue('page', undefined, properties);
   }
 
@@ -241,7 +263,9 @@ export class Analytics {
   destroy(): void {
     this.identityGeneration++;
     if (this.timer) clearInterval(this.timer);
+    if (this.historyTimer) clearTimeout(this.historyTimer);
     if (typeof window !== 'undefined') {
+      window.removeEventListener(HISTORY_EVENT, this.onHistoryChange);
       window.removeEventListener('pagehide', this.onPageHide);
       document.removeEventListener?.('visibilitychange', this.onVisibilityChange);
       window.removeEventListener('popstate', this.onNavigation);
@@ -249,6 +273,31 @@ export class Analytics {
     }
     this.pending = [];
     this.stopped = true;
+  }
+}
+
+/** Dispatched on window after history.pushState / replaceState. */
+const HISTORY_EVENT = 'ua:historychange';
+
+/**
+ * Wrap history.pushState / replaceState once per history object, whatever the
+ * number of SDK instances (React Strict Mode, hot reload), so one navigation
+ * dispatches one event. Each instance adds and removes its own listener. The
+ * Symbol.for marker survives module reloads. Adapted from getformo/sdk.
+ */
+function installHistoryHooksOnce(): void {
+  if (typeof history === 'undefined' || typeof window === 'undefined') return;
+  const marked = history as History & Record<symbol, boolean>;
+  const marker = Symbol.for('untitled-analytics.historyWrapped');
+  if (marked[marker]) return;
+  marked[marker] = true;
+  for (const name of ['pushState', 'replaceState'] as const) {
+    const original = history[name];
+    history[name] = function (this: History, ...args: Parameters<History['pushState']>) {
+      const result = original.apply(this, args);
+      window.dispatchEvent(new Event(HISTORY_EVENT));
+      return result;
+    };
   }
 }
 

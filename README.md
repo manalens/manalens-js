@@ -104,7 +104,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `writeKey` | required | Public write key for one site |
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
-| `autoPageviews` | `true` | Initial pageview plus `popstate` / `ua:navigate` |
+| `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), `popstate` and `ua:navigate` |
 | `batchSize` | `10` | Events per request |
 | `flushIntervalMs` | `5000` | Flush timer |
 | `requireConsent` | `false` | Consent mode; see below |
@@ -191,9 +191,14 @@ turns identity off for that instance.
 ## Pageviews
 
 `page()` tracks the current page. By default the SDK also sends an initial
-pageview and listens for `popstate`. For routers that do not emit
-`popstate`, call `analytics.page()` after each route change. `destroy()` clears
-pending events and listeners. The SDK sends only URL origin and path; query
+pageview and a pageview on each SPA navigation: it wraps `history.pushState`
+and `replaceState` (once, however many instances there are) and listens for
+`popstate`. Next.js, React Router, Vue Router and SvelteKit work without code.
+A navigation sends a pageview only when the path changes, so a query-only
+`replaceState` (filters, tabs) sends none. The SDK waits one tick so the new
+`document.title` is used. For a router that changes the page in another way,
+dispatch `window.dispatchEvent(new Event('ua:navigate'))` or call
+`analytics.page()`. `destroy()` clears pending events and listeners. The SDK sends only URL origin and path; query
 strings and fragments are omitted, while selected UTM fields are sanitized.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
