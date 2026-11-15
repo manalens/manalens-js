@@ -29,7 +29,7 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
   src="https://cdn.jsdelivr.net/npm/@untitled-analytics/web@0.4.0/dist/snippet.global.js"
   integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
   crossorigin="anonymous"
-  data-write-key="YOUR_PUBLISHABLE_KEY"
+  data-publishable-key="YOUR_PUBLISHABLE_KEY"
   data-endpoint="https://YOUR_COLLECTOR_ENDPOINT"
   defer
 ></script>
@@ -56,7 +56,7 @@ npm install @untitled-analytics/web
 ## Browser storage
 
 On first load the SDK creates a random UUID `anonymous_id` and stores it in a
-first-party cookie (`ua_<hash of write key>_anonymous-id`, one year,
+first-party cookie (`ua_<hash of publishable key>_anonymous-id`, one year,
 `SameSite=Lax`, `Secure` on HTTPS). If the browser rejects the cookie, the ID
 goes to `localStorage` under the same key, and then to page memory. When a
 cookie later works again, the SDK adopts the stored ID into the cookie and
@@ -90,7 +90,7 @@ consent before analytics storage can use the optional consent mode below.
 import { createAnalytics } from '@untitled-analytics/web';
 
 const analytics = createAnalytics({
-  writeKey: 'YOUR_PUBLISHABLE_KEY',
+  publishableKey: 'YOUR_PUBLISHABLE_KEY',
   endpoint: 'https://api.example.com',
   // crossSubdomainCookies: false, // optional: host-only cookies (default true)
 });
@@ -101,7 +101,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `writeKey` | required | The project publishable key (`ua_pk_...`; older projects: `ua_...`). Safe to ship in a page or a game build. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`) throws an error. |
+| `publishableKey` | required | The project publishable key (`ua_pk_...`; older projects: `ua_...`). Safe to ship in a page or a game build. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`) throws an error. Sent in the `x-publishable-key` header. `writeKey` is its old name and still works (deprecated); giving both with different values throws an error. |
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), `popstate` and `ua:navigate` |
@@ -125,7 +125,7 @@ Send nothing from some hosts, paths or timezones (adapted from Formo's SDK):
 
 ```js
 createAnalytics({
-  writeKey, endpoint,
+  publishableKey, endpoint,
   tracking: {
     excludeHosts: ['localhost', 'staging.example.com', '*.vercel.app'],
     excludePaths: ['/admin/*', '/internal'],
@@ -227,7 +227,7 @@ that shows a consent banner before analytics storage, should set
   identity fields from queued events and discards queued identify events.
 
 ```ts
-const analytics = createAnalytics({ writeKey, endpoint, requireConsent: true });
+const analytics = createAnalytics({ publishableKey, endpoint, requireConsent: true });
 consentManager.onChange(granted => analytics.setConsent(granted));
 ```
 
@@ -244,7 +244,7 @@ Device, OS and browser still come from the browser user agent.
 
 ```ts
 const analytics = createAnalytics({
-  writeKey: 'YOUR_PUBLISHABLE_KEY',
+  publishableKey: 'YOUR_PUBLISHABLE_KEY',
   endpoint: 'https://api.example.com',
   app: { platform: 'web', storefront: 'itch', app_version: '1.4.0', build: '571', engine: 'other' },
 });
@@ -272,7 +272,8 @@ For the standard game events (`game_open`, `session_start`, `session_end`,
 
 ## Snippet attributes
 
-`data-write-key` (the publishable key) and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
+`data-publishable-key` and `data-endpoint` are required. The old attribute name
+`data-write-key` still works. The snippet shares identity across subdomains by default. Add
 `data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
 `data-require-consent="true"` for consent mode and call
 `window.untitledAnalytics.setConsent(true)` from your banner. Add the

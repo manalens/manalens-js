@@ -78,12 +78,12 @@ test('ESM SDK sends page and custom events with first-party identity to a local 
   const originalFetch = globalThis.fetch;
   const options = [];
   globalThis.fetch = (url, init) => { options.push(init); return originalFetch(url, init); };
-  const sdk = new Analytics({ writeKey: 'ua_example', endpoint: `http://127.0.0.1:${server.address().port}`, flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'ua_example', endpoint: `http://127.0.0.1:${server.address().port}`, flushIntervalMs: 60000 });
   try {
     sdk.track('signup_completed', { plan: 'starter' });
     await sdk.flush();
     assert.equal(received.length, 1);
-    assert.equal(received[0].headers['x-write-key'], 'ua_example');
+    assert.equal(received[0].headers['x-publishable-key'], 'ua_example');
     assert.equal(options[0].credentials, 'omit');
     const events = received[0].body.events;
     assert.deepEqual(events.map(event => event.type), ['page', 'track']);
@@ -111,7 +111,7 @@ test('an Android app referrer such as YouTube is kept as android-app://<package>
   document.referrer = 'android-app://com.google.android.youtube/';
   const sent = [];
   globalThis.fetch = collector(sent);
-  const sdk = new Analytics({ writeKey: 'ua_example', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'ua_example', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try {
     await sdk.flush();
     assert.equal(eventsOf(sent)[0].context.referrer, 'android-app://com.google.android.youtube');
@@ -120,7 +120,7 @@ test('an Android app referrer such as YouTube is kept as android-app://<package>
 
 test('browser snippet initializes and sends a pageview', async () => {
   const { window, document } = browser('https://example.com/');
-  document.currentScript = { dataset: { writeKey: 'ua_example', endpoint: 'https://collector.example' } };
+  document.currentScript = { dataset: { publishableKey: 'ua_example', endpoint: 'https://collector.example' } };
   const sent = [];
   const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
@@ -133,7 +133,7 @@ test('browser snippet initializes and sends a pageview', async () => {
 
 for (const [attr, apex] of [[undefined, true], ['true', true], ['false', false]]) test(`snippet data-cross-subdomain=${attr} ${apex ? 'scopes the cookie to the apex domain' : 'keeps the cookie host-only'}`, async () => {
   const { window, document, jar } = browser('https://play.snippet.com/');
-  document.currentScript = { dataset: { writeKey: 'ua_snippet', endpoint: 'https://collector.example', ...(attr ? { crossSubdomain: attr } : {}) } };
+  document.currentScript = { dataset: { publishableKey: 'ua_snippet', endpoint: 'https://collector.example', ...(attr ? { crossSubdomain: attr } : {}) } };
   const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async () => ({ ok: true }) });
   const [cookie] = jar.find('ua_').filter(c => c.name.endsWith('_anonymous-id'));
@@ -151,7 +151,7 @@ test('route changes create new pageviews and failed batches retry in memory', as
     attempts++;
     return { ok: attempts !== 1, status: attempts === 1 ? 503 : 202 };
   };
-  const sdk = new Analytics({ writeKey: 'ua_example', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'ua_example', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try {
     await sdk.flush();
     await sdk.flush();
@@ -170,7 +170,7 @@ test('identify works without a wallet, persists user_id, and reset clears identi
   const sent = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = collector(sent);
-  const sdk = new Analytics({ writeKey: 'ua_identify', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'ua_identify', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
   try {
     sdk.track('anonymous_step');
     await sdk.identify('user_123', { email: 'person@example.com', plan: 'pro', score: 7 });
@@ -192,7 +192,7 @@ test('identify works without a wallet, persists user_id, and reset clears identi
 
     // A reload in the same browser session restores user_id from the cookie.
     sdk.destroy();
-    const reloaded = new Analytics({ writeKey: 'ua_identify', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+    const reloaded = new Analytics({ publishableKey: 'ua_identify', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
     assert.equal(reloaded.getUserId(), 'user_123');
     reloaded.reset();
     assert.equal(reloaded.getUserId(), undefined);
@@ -211,7 +211,7 @@ test('identify works without a wallet, persists user_id, and reset clears identi
 test('disabled tracking sends nothing, touches no storage, and event / identity limits are enforced', async t => {
   const { jar, local } = browser(); let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => { calls++; return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', disabled: true });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', disabled: true });
   try {
     sdk.page(); sdk.track('ignored'); await sdk.identify('user', { vip: true }); sdk.reset(); await sdk.flush();
     assert.equal(calls, 0); assert.equal(jar.writes.length, 0); assert.equal(local.stored.size, 0);
@@ -224,7 +224,7 @@ test('disabled tracking sends nothing, touches no storage, and event / identity 
 test('network retries retain message identity and queued events', async t => {
   browser(); let fail = true; const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); if (fail) { fail = false; throw new Error('offline'); } return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try { sdk.track('purchase', { revenue: 42 }); await sdk.flush(); await sdk.flush(); assert.deepEqual(sent[0].events, sent[1].events); }
   finally { sdk.destroy(); }
 });
@@ -232,7 +232,7 @@ test('network retries retain message identity and queued events', async t => {
 test('pagehide flushes queued events once with keepalive', async t => {
   const { window } = browser(); const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
   try {
     sdk.track('before_leave'); window.dispatchEvent(new Event('pagehide')); await sdk.flush();
     assert.equal(sent.length, 1); assert.equal(sent[0].init.keepalive, true);
@@ -243,14 +243,14 @@ test('pagehide flushes queued events once with keepalive', async t => {
 test('destroy removes navigation and lifecycle listeners and discards pending events', async t => {
   const { window } = browser(); const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(init); return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   sdk.destroy(); globalThis.location = new URL('https://example.com/other'); window.dispatchEvent(new Event('popstate')); window.dispatchEvent(new Event('pagehide')); sdk.track('after_destroy'); await sdk.flush(); assert.equal(sent.length, 0);
 });
 
 test('a failed identify is retried with the same message and requests omit credentials', async t => {
   browser(); const sent = []; let fail = true;
   t.mock.method(globalThis, 'fetch', async (url, init) => { sent.push({ url, init, body: JSON.parse(init.body) }); if (fail) { fail = false; return { ok: false, status: 503 }; } return { ok: true }; });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example/', autoPageviews: false, flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example/', autoPageviews: false, flushIntervalMs: 60000 });
   try {
     await sdk.identify('user', { plan: 'pro' });
     await sdk.flush();
@@ -263,7 +263,7 @@ test('a failed identify is retried with the same message and requests omit crede
 for (const [key, network] of [['gclid','google'],['gbraid','google'],['wbraid','google'],['fbclid','meta'],['msclkid','microsoft'],['ttclid','tiktok'],['twclid','twitter'],['li_fat_id','linkedin'],['rdt_cid','reddit'],['ScCid','snapchat']]) test(`captures ${key} and carries it across route changes`, async t => {
   const {window}=browser(`https://example.com/?${key}=ad-token&utm_source=${network}&utm_campaign=launch`); const sent=[];
   t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
-  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
   try { globalThis.location=new URL('https://example.com/checkout?email=private');window.dispatchEvent(new Event('popstate'));sdk.track('purchase',{revenue:120});await sdk.identify('customer');await sdk.flush();
     const events=sent.flatMap(x=>x.events||[]); assert.equal(events.length,4);
     for(const event of events){assert.equal(event.context[key],'ad-token');assert.equal(event.context.click_id,'ad-token');assert.equal(event.context.paid_source,network);assert.equal(event.context.utm_campaign,'launch');assert.ok(!JSON.stringify(event.context).includes('private'));}
@@ -273,26 +273,26 @@ for (const [key, network] of [['gclid','google'],['gbraid','google'],['wbraid','
 test('preserves multiple network IDs and replaces an entire campaign on a new touch',async t=>{
   const {window}=browser('https://example.com/?gclid=g&fbclid=f&utm_source=google&utm_term=old&utm_id=c1&utm_source_platform=google');const sent=[];
   t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
-  const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
   try{globalThis.location=new URL('https://example.com/new?utm_source=newsletter&utm_medium=email');window.dispatchEvent(new Event('popstate'));await sdk.flush();const [first,last]=sent[0].events;assert.equal(first.context.gclid,'g');assert.equal(first.context.fbclid,'f');assert.equal(first.context.click_id,'g');assert.equal(first.context.utm_id,'c1');assert.equal(last.context.utm_source,'newsletter');assert.equal(last.context.gclid,undefined);assert.equal(last.context.utm_term,undefined);assert.equal(last.context.paid_source,undefined);}finally{sdk.destroy();}
 });
 test('gad_source marks Google traffic but is never a click token; paid UTMs and referral aliases work',async t=>{
-  browser('https://example.com/?gad_source=1&referral_code=partner&utm_creative_format=video&utm_marketing_tactic=retargeting');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});let sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
+  browser('https://example.com/?gad_source=1&referral_code=partner&utm_creative_format=video&utm_marketing_tactic=retargeting');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});let sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
   try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.paid_source,'google');assert.equal(c.click_id,undefined);assert.equal(c.gad_source,'1');assert.equal(c.ref,'partner');assert.equal(c.utm_creative_format,'video');}finally{sdk.destroy();}
-  browser('https://example.com/?utm_medium=paid_social');sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();assert.equal(sent[1].events[0].context.paid_source,'paid_utm');}finally{sdk.destroy();}
+  browser('https://example.com/?utm_medium=paid_social');sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();assert.equal(sent[1].events[0].context.paid_source,'paid_utm');}finally{sdk.destroy();}
 });
 test('campaign values reject unsafe and oversized input and arbitrary queries',async t=>{
-  browser('https://example.com/?gclid=%3Cscript%3E&utm_term='+ 'x'.repeat(256)+'&email=private&token=secret');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.gclid,undefined);assert.equal(c.utm_term,undefined);assert.ok(!JSON.stringify(c).includes('secret'));assert.ok(!JSON.stringify(c).includes('private'));}finally{sdk.destroy();}
+  browser('https://example.com/?gclid=%3Cscript%3E&utm_term='+ 'x'.repeat(256)+'&email=private&token=secret');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.gclid,undefined);assert.equal(c.utm_term,undefined);assert.ok(!JSON.stringify(c).includes('secret'));assert.ok(!JSON.stringify(c).includes('private'));}finally{sdk.destroy();}
 });
 test('UTC midnight drops carried campaign context',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-20T23:59:59Z').getTime()});const {window}=browser('https://example.com/?gclid=g&utm_source=google');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({writeKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{t.mock.timers.tick(2000);globalThis.location=new URL('https://example.com/next');window.dispatchEvent(new Event('popstate'));await sdk.flush();assert.equal(sent[0].events[0].context.gclid,'g');assert.equal(sent[0].events[1].context.gclid,undefined);}finally{sdk.destroy();}
+  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-20T23:59:59Z').getTime()});const {window}=browser('https://example.com/?gclid=g&utm_source=google');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{t.mock.timers.tick(2000);globalThis.location=new URL('https://example.com/next');window.dispatchEvent(new Event('popstate'));await sdk.flush();assert.equal(sent[0].events[0].context.gclid,'g');assert.equal(sent[0].events[1].context.gclid,undefined);}finally{sdk.destroy();}
 });
 
 
-const make = (options = {}) => new Analytics({ endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000, writeKey: 'ua_identity', ...options });
+const make = (options = {}) => new Analytics({ endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000, publishableKey: 'ua_identity', ...options });
 async function firstEvent(sdk, sent) { sdk.track('probe'); await sdk.flush(); return eventsOf(sent).at(-1); }
 
-test('anonymous ID is created on first load, stored in a one-year cookie, survives reloads and is write-key scoped', async t => {
+test('anonymous ID is created on first load, stored in a one-year cookie, survives reloads and is publishable-key scoped', async t => {
   const jar = cookieJar(); const local = memoryStorage(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://example.com/', { jar, local });
@@ -308,19 +308,19 @@ test('anonymous ID is created on first load, stored in a one-year cookie, surviv
   sdk.destroy();
   browser('https://example.com/other', { jar, local });
   sdk = make(); assert.equal((await firstEvent(sdk, sent)).anonymous_id, first); sdk.destroy();
-  sdk = make({ writeKey: 'ua_other_site' }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, first); sdk.destroy();
+  sdk = make({ publishableKey: 'ua_other_site' }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, first); sdk.destroy();
 });
 
 test('by default one anonymous ID is shared between example.com and play.example.com', async t => {
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://play.shared.com/', { jar });
-  let sdk = make({ writeKey: 'ua_cross' });
+  let sdk = make({ publishableKey: 'ua_cross' });
   const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   const cookie = jar.find('ua_').find(c => c.name.endsWith('_anonymous-id'));
   assert.equal(cookie.domain, 'shared.com'); assert.equal(cookie.hostOnly, false);
   browser('https://shared.com/', { jar });
-  sdk = make({ writeKey: 'ua_cross' });
+  sdk = make({ publishableKey: 'ua_cross' });
   assert.equal((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
 });
 
@@ -328,17 +328,17 @@ test('crossSubdomainCookies: false keeps a separate anonymous ID per host', asyn
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://play.split.com/', { jar });
-  let sdk = make({ writeKey: 'ua_split', crossSubdomainCookies: false }); const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  let sdk = make({ publishableKey: 'ua_split', crossSubdomainCookies: false }); const play = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   browser('https://split.com/', { jar });
-  sdk = make({ writeKey: 'ua_split', crossSubdomainCookies: false }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
+  sdk = make({ publishableKey: 'ua_split', crossSubdomainCookies: false }); assert.notEqual((await firstEvent(sdk, sent)).anonymous_id, play); sdk.destroy();
 });
 
 test('an existing host-only cookie migrates to the apex domain under the default setting', async t => {
   const jar = cookieJar(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://app.migrate.com/', { jar });
-  let sdk = make({ writeKey: 'ua_migrate', crossSubdomainCookies: false }); const legacy = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
-  sdk = make({ writeKey: 'ua_migrate' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, legacy); sdk.destroy();
+  let sdk = make({ publishableKey: 'ua_migrate', crossSubdomainCookies: false }); const legacy = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  sdk = make({ publishableKey: 'ua_migrate' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, legacy); sdk.destroy();
   const cookies = jar.find('ua_').filter(c => c.name.endsWith('_anonymous-id'));
   assert.equal(cookies.length, 1); assert.equal(cookies[0].domain, 'migrate.com');
 });
@@ -347,14 +347,14 @@ test('blocked cookies fall back to localStorage, then to memory', async t => {
   const local = memoryStorage(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://nocookie.test/', { jar: cookieJar({ blocked: true }), local });
-  let sdk = make({ writeKey: 'ua_fallback' }); const stored = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  let sdk = make({ publishableKey: 'ua_fallback' }); const stored = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   assert.match(stored, uuid);
   assert.ok([...local.stored.values()].includes(stored));
   browser('https://nocookie.test/', { jar: cookieJar({ blocked: true }), local });
-  sdk = make({ writeKey: 'ua_fallback' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, stored); sdk.destroy();
+  sdk = make({ publishableKey: 'ua_fallback' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, stored); sdk.destroy();
 
   browser('https://nothing.test/', { jar: cookieJar({ blocked: true }), localBlocked: true });
-  sdk = make({ writeKey: 'ua_memory_only' });
+  sdk = make({ publishableKey: 'ua_memory_only' });
   const a = await firstEvent(sdk, sent); const b = await firstEvent(sdk, sent);
   assert.match(a.anonymous_id, uuid); assert.equal(a.anonymous_id, b.anonymous_id, 'memory keeps the ID for the page lifetime');
   sdk.destroy();
@@ -364,9 +364,9 @@ test('a localStorage ID is adopted into the cookie and the fallback copy is remo
   const local = memoryStorage(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://adopt.test/', { jar: cookieJar({ blocked: true }), local });
-  let sdk = make({ writeKey: 'ua_adopt' }); const id = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
+  let sdk = make({ publishableKey: 'ua_adopt' }); const id = (await firstEvent(sdk, sent)).anonymous_id; sdk.destroy();
   const { jar } = browser('https://adopt.test/', { local });
-  sdk = make({ writeKey: 'ua_adopt' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, id); sdk.destroy();
+  sdk = make({ publishableKey: 'ua_adopt' }); assert.equal((await firstEvent(sdk, sent)).anonymous_id, id); sdk.destroy();
   assert.equal(decodeURIComponent(jar.find('ua_').find(c => c.name.endsWith('_anonymous-id')).value), id);
   assert.ok(![...local.stored.values()].includes(id));
 });
@@ -375,7 +375,7 @@ test('session_id is stable during activity and rotates after 30 minutes of inact
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://example.com/');
-  const sdk = make({ writeKey: 'ua_session' });
+  const sdk = make({ publishableKey: 'ua_session' });
   try {
     const a = await firstEvent(sdk, sent);
     t.mock.timers.tick(29 * 60000); const b = await firstEvent(sdk, sent);
@@ -391,7 +391,7 @@ test('optOut drops queued events, clears identity, persists across reloads, and 
   const jar = cookieJar(); const local = memoryStorage(); const sent = [];
   t.mock.method(globalThis, 'fetch', collector(sent));
   browser('https://example.com/', { jar, local });
-  let sdk = make({ writeKey: 'ua_optout' });
+  let sdk = make({ publishableKey: 'ua_optout' });
   sdk.track('queued'); await sdk.identify('user_1');
   const before = eventsOf(sent).at(-1).anonymous_id; const count = sent.length;
   sdk.track('queued_then_dropped'); sdk.optOut();
@@ -400,7 +400,7 @@ test('optOut drops queued events, clears identity, persists across reloads, and 
   assert.equal(sent.length, count);
   assert.deepEqual(jar.find('ua_').filter(c => !c.name.endsWith('_opt-out')), []);
   sdk.destroy();
-  sdk = make({ writeKey: 'ua_optout' }); assert.equal(sdk.isOptedOut(), true); sdk.track('still_ignored'); await sdk.flush(); assert.equal(sent.length, count);
+  sdk = make({ publishableKey: 'ua_optout' }); assert.equal(sdk.isOptedOut(), true); sdk.track('still_ignored'); await sdk.flush(); assert.equal(sent.length, count);
   sdk.optIn(); const after = await firstEvent(sdk, sent);
   assert.match(after.anonymous_id, uuid); assert.notEqual(after.anonymous_id, before); assert.equal(after.user_id, undefined);
   sdk.destroy();
@@ -409,7 +409,7 @@ test('optOut drops queued events, clears identity, persists across reloads, and 
 test('requireConsent: no storage and no identity fields until setConsent(true)', async t => {
   const { jar, local } = browser('https://consent.com/');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = make({ writeKey: 'ua_consent', requireConsent: true });
+  const sdk = make({ publishableKey: 'ua_consent', requireConsent: true });
   try {
     sdk.track('before'); await sdk.identify('user_c', { plan: 'pro' }); await sdk.flush();
     assert.equal(jar.writes.length, 0); assert.equal(local.stored.size, 0); assert.equal(sdk.getAnonymousId(), undefined);
@@ -429,7 +429,7 @@ test('requireConsent: no storage and no identity fields until setConsent(true)',
 test('setConsent(false) clears identity storage and strips identity from queued events', async t => {
   const { jar, local } = browser('https://withdraw.com/');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = make({ writeKey: 'ua_withdraw', requireConsent: true });
+  const sdk = make({ publishableKey: 'ua_withdraw', requireConsent: true });
   try {
     sdk.setConsent(true);
     await sdk.identify('user_w', { plan: 'pro' });
@@ -447,7 +447,7 @@ test('setConsent(false) clears identity storage and strips identity from queued 
 
 test('snippet data-require-consent="true" starts without browser storage', async () => {
   const { window, document, jar } = browser('https://snippet-consent.com/');
-  document.currentScript = { dataset: { writeKey: 'ua_snippet_consent', endpoint: 'https://collector.example', requireConsent: 'true' } };
+  document.currentScript = { dataset: { publishableKey: 'ua_snippet_consent', endpoint: 'https://collector.example', requireConsent: 'true' } };
   const sent = [];
   const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
@@ -469,7 +469,7 @@ function gatedFetch(sent) {
 test('a failed in-flight batch is re-queued without identity after setConsent(false)', async t => {
   browser('https://race.com/');
   const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
-  const sdk = make({ writeKey: 'ua_race', requireConsent: true });
+  const sdk = make({ publishableKey: 'ua_race', requireConsent: true });
   try {
     sdk.setConsent(true);
     sdk.track('a');
@@ -488,7 +488,7 @@ test('a failed in-flight batch is re-queued without identity after setConsent(fa
 test('a failed in-flight batch is dropped after optOut()', async t => {
   browser('https://race-optout.com/');
   const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
-  const sdk = make({ writeKey: 'ua_race_optout' });
+  const sdk = make({ publishableKey: 'ua_race_optout' });
   try {
     sdk.track('a');
     const open = gate.holdNext();
@@ -506,18 +506,18 @@ test('consent mode before consent: reset() deletes stored identity and optOut() 
   const instances = []; t.after(() => instances.forEach(instance => instance.destroy()));
   const own = options => { const instance = make(options); instances.push(instance); return instance; };
   browser('https://play.delete.com/', { jar, local });
-  let sdk = own({ writeKey: 'ua_delete' }); await sdk.identify('user_d'); sdk.destroy();
+  let sdk = own({ publishableKey: 'ua_delete' }); await sdk.identify('user_d'); sdk.destroy();
   local.setItem([...jar.store.values()].find(c => c.name.endsWith('_anonymous-id')).name, 'stale-copy');
   assert.ok(jar.find('ua_').length >= 3);
 
-  sdk = own({ writeKey: 'ua_delete', requireConsent: true });
+  sdk = own({ publishableKey: 'ua_delete', requireConsent: true });
   sdk.reset();
   assert.deepEqual(jar.find('ua_'), [], 'apex and host cookies cleared without consent');
   assert.equal(local.stored.size, 0, 'localStorage cleared without consent');
   sdk.optOut(); sdk.destroy();
   assert.ok(jar.find('ua_').some(c => c.name.endsWith('_opt-out')));
 
-  sdk = own({ writeKey: 'ua_delete', requireConsent: true });
+  sdk = own({ publishableKey: 'ua_delete', requireConsent: true });
   const before = sent.length; sdk.track('ignored'); await sdk.flush();
   assert.equal(sdk.isOptedOut(), true); assert.equal(sent.length, before);
   sdk.setConsent(true); assert.equal(sdk.isOptedOut(), true, 'consent does not override opt-out');
@@ -531,7 +531,7 @@ for (const [name, change] of [
 ]) test(`a failed in-flight batch loses its old identity after ${name}`, async t => {
   browser('https://generation.com/');
   const sent = []; const gate = gatedFetch(sent); t.mock.method(globalThis, 'fetch', gate.fetch);
-  const sdk = make({ writeKey: `ua_generation_${name.length}` });
+  const sdk = make({ publishableKey: `ua_generation_${name.length}` });
   try {
     sdk.track('a');
     const open = gate.holdNext();
@@ -567,7 +567,7 @@ test('SPA navigation: pushState sends a pageview with the new title; query-only 
   const { document } = browser('https://example.com/');
   const history = fakeHistory(); globalThis.history = history;
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try {
     history.replaceState(null, '', 'https://example.com/'); // hydration: same URL
     history.pushState(null, '', '/docs?token=private');
@@ -590,10 +590,10 @@ test('SPA navigation: the history wrapper is installed once for several instance
   browser('https://example.com/');
   const history = fakeHistory(); const originalPush = history.pushState; globalThis.history = history;
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const first = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const first = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   const wrapped = history.pushState;
   assert.notEqual(wrapped, originalPush);
-  const second = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const second = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try {
     assert.equal(history.pushState, wrapped, 'a second instance does not wrap again');
     first.destroy(); // React Strict Mode: the first instance is torn down
@@ -613,7 +613,7 @@ test('autoPageviews: false does not wrap history', async t => {
   browser('https://example.com/');
   const history = fakeHistory(); const original = history.pushState; globalThis.history = history;
   t.mock.method(globalThis, 'fetch', collector([]));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', autoPageviews: false });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', autoPageviews: false });
   try { assert.equal(history.pushState, original); } finally { sdk.destroy(); delete globalThis.history; }
 });
 
@@ -623,7 +623,7 @@ test('retry: a refused batch (400, 401, 403) is dropped, not sent again', async 
   for (const status of [400, 401, 403, 413]) {
     browser('https://example.com/');
     const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(sent.length === 1 ? status : 202); });
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
     try {
       sdk.track('refused'); await sdk.flush(); await sdk.flush();
       assert.equal(sent.length, 1, `status ${status}`);
@@ -637,7 +637,7 @@ test('retry: 408, 429 and 5xx are sent again at most retryCount times', async t 
   for (const status of [408, 429, 500, 503]) {
     browser('https://example.com/');
     const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(status); });
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 2 });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 2 });
     try {
       sdk.track('flaky');
       for (let i = 0; i < 5; i++) await sdk.flush();
@@ -651,7 +651,7 @@ test('retry: network errors (offline) are not counted; the events wait until the
   browser('https://example.com/');
   let offline = 6; const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); if (offline-- > 0) throw new TypeError('Failed to fetch'); return response(202); });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 1 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 1 });
   try {
     sdk.track('offline_event');
     for (let i = 0; i < 8; i++) await sdk.flush();
@@ -665,7 +665,7 @@ test('backoff: after a failure, a full batch waits; flush() sends now; a success
   browser('https://example.com/');
   let fail = true; const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(fail ? 503 : 202); });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
   try {
     sdk.track('a'); await tick(); // full batch: sent, 503
     assert.equal(sent.length, 1);
@@ -685,7 +685,7 @@ test('backoff: Retry-After on 429 is honoured, up to 60 s', async t => {
   browser('https://example.com/');
   const sent = [];
   t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return sent.length === 1 ? response(429, { 'retry-after': '45' }) : response(202); });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1 });
   try {
     sdk.track('a'); await tick();
     t.mock.timers.tick(40_000);
@@ -700,7 +700,7 @@ test('backoff: Retry-After on 429 is honoured, up to 60 s', async t => {
 test('maxQueueSize: the queue stays under the byte limit and drops the oldest events first', async t => {
   browser('https://example.com/');
   t.mock.method(globalThis, 'fetch', async () => { throw new TypeError('Failed to fetch'); });
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1000, maxQueueSize: 4000 });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 1000, maxQueueSize: 4000 });
   const sent = [];
   try {
     for (let i = 0; i < 20; i++) sdk.track(`event_${i}`, { note: 'x'.repeat(300) });
@@ -718,7 +718,7 @@ test('tracking.excludeHosts: exact and *. hosts send nothing and write no identi
   for (const [url, hosts] of [['https://staging.example.com/', ['STAGING.example.com']], ['https://app-git-x.vercel.app/', ['*.vercel.app']]]) {
     const { jar } = browser(url);
     const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: hosts } });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: hosts } });
     try {
       sdk.track('signup'); await sdk.identify('user-1'); await sdk.flush();
       assert.equal(sent.length, 0, url);
@@ -729,7 +729,7 @@ test('tracking.excludeHosts: exact and *. hosts send nothing and write no identi
   // The wildcard does not match the bare domain or a look-alike.
   for (const url of ['https://vercel.app/', 'https://evilvercel.app/']) {
     browser(url); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: ['*.vercel.app'] } });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeHosts: ['*.vercel.app'] } });
     try { await sdk.flush(); assert.equal(eventsOf(sent).length, 1, url); } finally { sdk.destroy(); }
   }
 });
@@ -737,7 +737,7 @@ test('tracking.excludeHosts: exact and *. hosts send nothing and write no identi
 test('tracking.excludePaths: exact and /* prefix paths, checked per event as a SPA navigates', async t => {
   const { window } = browser('https://example.com/admin/users');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*', '/checkout/'] } });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*', '/checkout/'] } });
   try {
     sdk.track('admin_click');
     globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
@@ -756,10 +756,10 @@ test('tracking.excludeTimezones: no events, no storage, and an existing identity
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const { jar } = browser('https://example.com/');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const first = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const first = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   first.destroy();
   assert.ok(jar.find('ua_').some(cookie => cookie.name.endsWith('_anonymous-id')), 'identity from an earlier visit');
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus', zone.toUpperCase()] } });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus', zone.toUpperCase()] } });
   try {
     sdk.track('x'); await sdk.identify('u'); sdk.optIn(); await sdk.flush();
     assert.equal(sent.length, 0);
@@ -767,7 +767,7 @@ test('tracking.excludeTimezones: no events, no storage, and an existing identity
     assert.equal(sdk.getAnonymousId(), undefined);
   } finally { sdk.destroy(); }
   // Another timezone in the list does not exclude this visitor.
-  const other = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus'] } });
+  const other = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: ['Mars/Olympus'] } });
   try { await other.flush(); assert.equal(eventsOf(sent).length, 1); } finally { other.destroy(); }
 });
 
@@ -781,7 +781,7 @@ test('tracking rules: trailing dots, IDN hosts, double slashes, escapes and time
   ];
   for (const [url, tracking] of cases) {
     browser(url); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking });
     try { sdk.track('x'); await sdk.flush(); assert.equal(sent.length, 0, url); } finally { sdk.destroy(); }
   }
   // A visitor in Asia/Calcutta is excluded by Asia/Kolkata, and the reverse.
@@ -789,7 +789,7 @@ test('tracking rules: trailing dots, IDN hosts, double slashes, escapes and time
   for (const [visitor, rule] of [['Asia/Calcutta', 'Asia/Kolkata'], ['Asia/Kolkata', 'Asia/Calcutta'], ['Europe/Kiev', 'Europe/Kyiv'], ['Etc/UTC', 'UTC']]) {
     t.mock.method(Intl, 'DateTimeFormat', function (...args) { const real = new original(...args); return args.length ? real : { resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: visitor }) }; });
     browser('https://example.com/'); const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-    const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: [rule] } });
+    const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeTimezones: [rule] } });
     try { await sdk.flush(); assert.equal(sent.length, 0, `${visitor} vs ${rule}`); } finally { sdk.destroy(); Intl.DateTimeFormat.mock?.restore?.(); t.mock.restoreAll(); }
   }
 });
@@ -797,7 +797,7 @@ test('tracking rules: trailing dots, IDN hosts, double slashes, escapes and time
 test('tracking rules: an excluded landing page carries no campaign, and a held identify is sent on the next allowed page', async t => {
   const { window } = browser('https://example.com/admin?utm_source=internal');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*'] } });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*'] } });
   try {
     await sdk.identify('user-9', { plan: 'pro' });
     globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
@@ -812,7 +812,7 @@ test('tracking rules: an excluded landing page carries no campaign, and a held i
 test('consent on an excluded page holds the identify until an allowed page', async t => {
   const { window, jar } = browser('https://example.com/admin');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, requireConsent: true, tracking: { excludePaths: ['/admin'] } });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, requireConsent: true, tracking: { excludePaths: ['/admin'] } });
   try {
     await sdk.identify('user-7', { plan: 'team' });
     sdk.setConsent(true);
@@ -827,7 +827,7 @@ test('consent on an excluded page holds the identify until an allowed page', asy
 test('identify() while opted out is a no-op, and optIn() starts without a user ID', async t => {
   browser('https://example.com/');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
   try {
     await sdk.identify('before');
     sdk.optOut();
@@ -845,7 +845,7 @@ test('game handoff: ua_hid leaves the address bar and one identity_handoff event
   browser(`https://example.com/wiki?tab=boss&ua_hid=${gameId.toUpperCase()}.1794784346#drops`);
   const history = fakeHistory(); globalThis.history = history;
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  const sdk = new Analytics({ publishableKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
   try {
     assert.equal(globalThis.location.href, 'https://example.com/wiki?tab=boss#drops');
     assert.deepEqual(history.calls, [['replace', 'https://example.com/wiki?tab=boss#drops']]);
@@ -857,7 +857,7 @@ test('game handoff: ua_hid leaves the address bar and one identity_handoff event
     assert.equal(handoff[0].anonymous_id, sdk.getAnonymousId());
     assert.ok(events.every(event => !JSON.stringify(event).includes('ua_hid')), 'no event carries the parameter');
     // A reload (same page, no parameter) sends no second handoff.
-    const again = new Analytics({ writeKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+    const again = new Analytics({ publishableKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
     await again.flush(); again.destroy();
     assert.equal(eventsOf(sent).filter(event => event.event === 'identity_handoff').length, 1);
   } finally { sdk.destroy(); delete globalThis.history; }
@@ -867,7 +867,7 @@ test('game handoff: waits for consent, and is dropped by setConsent(false), opt-
   browser(`https://consent.com/?ua_hid=${gameId}.1794784346`);
   globalThis.history = fakeHistory();
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  let sdk = make({ writeKey: 'ua_handoff_consent', requireConsent: true });
+  let sdk = make({ publishableKey: 'ua_handoff_consent', requireConsent: true });
   try {
     await sdk.flush();
     assert.equal(globalThis.location.search, '', 'removed before consent too');
@@ -880,20 +880,20 @@ test('game handoff: waits for consent, and is dropped by setConsent(false), opt-
 
     sent.length = 0;
     browser(`https://withdraw.com/?ua_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
-    sdk = make({ writeKey: 'ua_handoff_withdraw', requireConsent: true });
+    sdk = make({ publishableKey: 'ua_handoff_withdraw', requireConsent: true });
     sdk.setConsent(false); sdk.setConsent(true); await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'withdrawn consent drops the handoff');
     sdk.destroy();
 
     browser(`https://optout.com/?ua_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
-    sdk = make({ writeKey: 'ua_handoff_optout', requireConsent: true });
+    sdk = make({ publishableKey: 'ua_handoff_optout', requireConsent: true });
     sdk.optOut(); sdk.optIn(); sdk.setConsent(true); await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'opt-out drops the handoff');
     sdk.destroy();
 
     for (const value of ['not-an-id', `${gameId}`, `${gameId}.abc`]) {
       browser(`https://bad.com/?ua_hid=${encodeURIComponent(value)}&q=1`); globalThis.history = fakeHistory();
-      sdk = make({ writeKey: 'ua_handoff_bad' });
+      sdk = make({ publishableKey: 'ua_handoff_bad' });
       await sdk.flush();
       assert.equal(globalThis.location.search, '?q=1', value);
       assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, value);
@@ -907,11 +907,11 @@ test('game handoff: an own ID is ignored, and the URL is unchanged without the p
   browser('https://self.com/', { jar });
   globalThis.history = fakeHistory();
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  let sdk = make({ writeKey: 'ua_handoff_self' });
+  let sdk = make({ publishableKey: 'ua_handoff_self' });
   const own = sdk.getAnonymousId(); sdk.destroy();
   assert.deepEqual(globalThis.history.calls, [], 'no replaceState without the parameter');
   browser(`https://self.com/?ua_hid=${own}.1794784346`, { jar }); globalThis.history = fakeHistory();
-  sdk = make({ writeKey: 'ua_handoff_self' });
+  sdk = make({ publishableKey: 'ua_handoff_self' });
   try {
     await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false);
@@ -924,7 +924,7 @@ const gameApp = { platform: 'web', storefront: 'itch', app_version: '1.4.0', bui
 test('app option: every event carries context.app next to context.page; the channel stays web', async t => {
   browser('https://game.example/play');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
-  const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: gameApp });
+  const sdk = new Analytics({ publishableKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: gameApp });
   try {
     sdk.track('game_open', { is_first_open: true });
     await sdk.identify('player-1', { plan: 'free' });
@@ -949,7 +949,7 @@ test('app option: an invalid object is dropped with a warning and events are sen
     browser('https://game.example/');
     const sent = []; const fetchMock = t.mock.method(globalThis, 'fetch', collector(sent));
     const warn = t.mock.method(console, 'warn', () => {});
-    const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
+    const sdk = new Analytics({ publishableKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
     try {
       await sdk.flush();
       assert.equal(warn.mock.callCount(), 1, JSON.stringify(app));
@@ -963,7 +963,7 @@ test('app option: the longest valid labels pass, and a copy is sent (later chang
   browser('https://game.example/');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const app = { platform: 'windows', app_version: `${'1'.repeat(31)}+`, build: 'Build 2026.11.16 rc-1_a'.padEnd(64, 'x') };
-  const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
+  const sdk = new Analytics({ publishableKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
   try {
     app.platform = 'nintendo';
     await sdk.flush();
@@ -974,7 +974,7 @@ test('app option: the longest valid labels pass, and a copy is sent (later chang
 
 test('snippet data-app-* attributes set the app context', async () => {
   const { window, document } = browser('https://game.example/');
-  document.currentScript = { dataset: { writeKey: 'ua_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', appStorefront: 'itch', appVersion: '1.4.0', appBuild: '571', appEngine: 'other' } };
+  document.currentScript = { dataset: { publishableKey: 'ua_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', appStorefront: 'itch', appVersion: '1.4.0', appBuild: '571', appEngine: 'other' } };
   const sent = [];
   const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, console, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
@@ -984,10 +984,43 @@ test('snippet data-app-* attributes set the app context', async () => {
   window.untitledAnalytics.destroy();
 });
 
-test('writeKey takes the publishable key: ua_pk_ and older ua_ keys pass; secret and API keys are refused', () => {
+test('publishableKey takes the publishable key: ua_pk_ and older ua_ keys pass; secret and API keys are refused', () => {
   browser('https://example.com/');
-  for (const writeKey of ['ua_pk_abc', 'ua_ddkueCnj_bij17faLH4j7s-C__bNAL6Y']) new Analytics({ writeKey, endpoint: 'https://collector.example', disabled: true }).destroy();
-  for (const writeKey of ['ua_sk_abc', 'ua_api_abc', 'ua_mcp_abc']) {
-    assert.throws(() => new Analytics({ writeKey, endpoint: 'https://collector.example', disabled: true }), /publishable key/, writeKey);
+  for (const key of ['ua_pk_abc', 'ua_ddkueCnj_bij17faLH4j7s-C__bNAL6Y']) new Analytics({ publishableKey: key, endpoint: 'https://collector.example', disabled: true }).destroy();
+  for (const key of ['ua_sk_abc', 'ua_api_abc', 'ua_mcp_abc']) {
+    assert.throws(() => new Analytics({ publishableKey: key, endpoint: 'https://collector.example', disabled: true }), /publishable key/, key);
+    assert.throws(() => new Analytics({ writeKey: key, endpoint: 'https://collector.example', disabled: true }), /publishable key/, key);
+  }
+  assert.throws(() => new Analytics({ endpoint: 'https://collector.example', disabled: true }), /publishableKey and endpoint are required/);
+});
+
+test('writeKey is a deprecated alias of publishableKey: same header, same identity; two different keys throw', async t => {
+  browser('https://example.com/');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ headers: init.headers, body: JSON.parse(init.body) }); return { ok: true }; });
+  let sdk = new Analytics({ writeKey: 'ua_pk_alias', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+  sdk.track('legacy_option'); await sdk.flush(); sdk.destroy();
+  sdk = new Analytics({ publishableKey: 'ua_pk_alias', endpoint: 'https://collector.example', autoPageviews: false, flushIntervalMs: 60000 });
+  sdk.track('new_option'); await sdk.flush(); sdk.destroy();
+  assert.equal(sent[0].headers['x-publishable-key'], 'ua_pk_alias');
+  assert.equal(sent[0].headers['x-write-key'], undefined);
+  assert.equal(sent[1].headers['x-publishable-key'], 'ua_pk_alias');
+  // The cookie name hashes the key value, so moving from writeKey to publishableKey keeps the anonymous ID.
+  assert.equal(sent[0].body.events[0].anonymous_id, sent[1].body.events[0].anonymous_id);
+  new Analytics({ publishableKey: 'ua_pk_same', writeKey: 'ua_pk_same', endpoint: 'https://collector.example', disabled: true }).destroy();
+  assert.throws(() => new Analytics({ publishableKey: 'ua_pk_one', writeKey: 'ua_pk_two', endpoint: 'https://collector.example', disabled: true }), /Give one key: publishableKey/);
+});
+
+test('snippet: data-publishable-key works, and the old data-write-key still works', async () => {
+  for (const dataset of [{ publishableKey: 'ua_pk_snippet_new' }, { writeKey: 'ua_pk_snippet_old' }]) {
+    const { window, document } = browser('https://example.com/');
+    document.currentScript = { dataset: { ...dataset, endpoint: 'https://collector.example' } };
+    const sent = [];
+    const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+    vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(init.headers); return { ok: true }; } });
+    assert.ok(window.untitledAnalytics, JSON.stringify(dataset));
+    await window.untitledAnalytics.flush();
+    assert.equal(sent[0]['x-publishable-key'], dataset.publishableKey || dataset.writeKey);
+    window.untitledAnalytics.destroy();
   }
 });

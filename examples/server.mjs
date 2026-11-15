@@ -7,7 +7,7 @@ const root = dirname(fileURLToPath(import.meta.url));
 const captured = [];
 const server = createServer(async (request, response) => {
   response.setHeader('access-control-allow-origin', '*');
-  response.setHeader('access-control-allow-headers', 'content-type,x-write-key');
+  response.setHeader('access-control-allow-headers', 'content-type,x-publishable-key');
   response.setHeader('access-control-allow-methods', 'POST,OPTIONS');
   if (request.method === 'OPTIONS') { response.writeHead(204).end(); return; }
   if (request.url === '/v0/events' && request.method === 'POST') {
@@ -15,7 +15,7 @@ const server = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk;
     try {
       const batch = JSON.parse(body);
-      if (request.headers['x-write-key'] !== 'ua_example' || !Array.isArray(batch.events)) throw new Error('Invalid example request');
+      if (request.headers['x-publishable-key'] !== 'ua_example' || !Array.isArray(batch.events)) throw new Error('Invalid example request');
       captured.push(...batch.events);
       response.writeHead(202, { 'content-type': 'application/json' }).end(JSON.stringify({ accepted: batch.events.length }));
     } catch { response.writeHead(400).end(); }

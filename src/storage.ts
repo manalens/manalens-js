@@ -12,7 +12,7 @@ const PREFIX = 'ua';
 const PROBE = '__ua_domain_probe';
 const EXPIRED = 'Thu, 01 Jan 1970 00:00:00 GMT';
 
-/** Short, stable FNV-1a hash so cookie names never contain the raw write key. */
+/** Short, stable FNV-1a hash so cookie names never contain the raw publishable key. */
 function hashKey(value: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) {
@@ -23,8 +23,8 @@ function hashKey(value: string): string {
 }
 
 /** Project-scoped storage key, e.g. `ua_1a2b3c4d_anonymous-id`. */
-export function storageKey(writeKey: string, name: string): string {
-  return `${PREFIX}_${hashKey(writeKey)}_${name}`;
+export function storageKey(publishableKey: string, name: string): string {
+  return `${PREFIX}_${hashKey(publishableKey)}_${name}`;
 }
 
 function readCookieJar(): string {

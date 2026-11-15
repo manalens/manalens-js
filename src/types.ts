@@ -45,9 +45,15 @@ export interface AnalyticsOptions {
    * The project publishable key (`ua_pk_...`, or `ua_...` on older projects).
    * It is public and safe in a page or a game build. The server resolves it to
    * the project. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`)
-   * is refused: never put those in browser code.
+   * is refused: never put those in browser code. Required (or the deprecated
+   * `writeKey`).
    */
-  writeKey: string;
+  publishableKey?: string;
+  /**
+   * @deprecated The old name of `publishableKey`; still accepted. Giving both
+   * with different values throws an error.
+   */
+  writeKey?: string;
   endpoint: string;
   /**
    * Scope identity cookies to the apex domain (`.example.com`) so subdomains
