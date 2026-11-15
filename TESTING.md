@@ -6,7 +6,7 @@ GitHub Actions runs both on pull requests and main.
 The examples build the actual ESM and browser bundles. Tests cover page/custom
 events, the script snippet (including `data-cross-subdomain`), the first-party
 `anonymous_id` cookie with localStorage and memory fallbacks, cookie migration
-to the apex domain, write-key scoping, the 30-minute `session_id`, identify
+to the apex domain, publishable-key scoping (and the old `writeKey` / `data-write-key` names), the 30-minute `session_id`, identify
 events with persisted `user_id`, `reset()`, `optOut()` / `optIn()`, the
 optional consent mode (`requireConsent`, `setConsent`, `data-require-consent`),
 failed in-flight batches after `reset()`, `setConsent(false)` (also then `true`), `optOut()` (also then `optIn()`), deletion and

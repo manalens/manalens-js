@@ -18,7 +18,21 @@ export { appPlatforms, appStorefronts, appEngines } from './app';
 /** Key prefixes that must never be used in browser code (secret key, API keys). */
 const privateKeyPrefixes = ['ua_sk_', 'ua_api_', 'ua_mcp_'];
 
-type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
+/**
+ * The publishable key from `publishableKey`, or from `writeKey` (its old,
+ * deprecated name). Both with different values is an error, so a page never
+ * sends events to a project it did not mean.
+ */
+function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey' | 'writeKey'>): string {
+  const { publishableKey, writeKey } = options;
+  if (publishableKey && writeKey && publishableKey !== writeKey) throw new Error('Give one key: publishableKey (writeKey is its old name). The two values differ');
+  const key = publishableKey || writeKey;
+  if (!key) throw new Error('publishableKey and endpoint are required');
+  if (privateKeyPrefixes.some(prefix => key.startsWith(prefix))) throw new Error('publishableKey must be the publishable key (ua_pk_...). Never put a secret key or an API key in browser code');
+  return key;
+}
+
+type ResolvedOptions = AnalyticsOptions & { publishableKey: string } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
 /** Queue limits, as in getformo/sdk's EventQueue. */
 const MAX_QUEUE_BYTES = 500 * 1024;
@@ -86,8 +100,8 @@ export class Analytics {
   };
 
   constructor(options: AnalyticsOptions) {
-    if (!options.writeKey || !options.endpoint) throw new Error('writeKey and endpoint are required');
-    if (privateKeyPrefixes.some(prefix => options.writeKey.startsWith(prefix))) throw new Error('writeKey must be the publishable key (ua_pk_...). Never put a secret key or an API key in browser code');
+    if (!options.endpoint) throw new Error('publishableKey and endpoint are required');
+    const publishableKey = resolvePublishableKey(options);
     this.app = resolveAppInfo(options.app);
     this.options = {
       autoPageviews: true,
@@ -95,11 +109,12 @@ export class Analytics {
       flushIntervalMs: 5000,
       disabled: false,
       ...options,
+      publishableKey,
       crossSubdomainCookies: options.crossSubdomainCookies !== false,
       retryCount: clamp(options.retryCount, 0, 10, 3),
       maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };
-    const key = (name: string) => storageKey(this.options.writeKey, name);
+    const key = (name: string) => storageKey(this.options.publishableKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
     if (typeof window === 'undefined' || this.options.disabled) return;
     // A game's handoff parameter leaves the address bar at once, so it is not
@@ -368,7 +383,7 @@ export class Analytics {
     try {
       const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v0/events', {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-write-key': this.options.writeKey },
+        headers: { 'content-type': 'application/json', 'x-publishable-key': this.options.publishableKey },
         body: JSON.stringify({ events: batch }),
         credentials: 'omit',
         keepalive,
