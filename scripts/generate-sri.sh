@@ -131,7 +131,7 @@ cat <<EOF
   src="$URL"
   integrity="sha384-$HASH"
   crossorigin="anonymous"
-  data-write-key="YOUR_WRITE_KEY"
+  data-publishable-key="YOUR_PUBLISHABLE_KEY"
   data-endpoint="https://YOUR_COLLECTOR_ENDPOINT"
   defer
 ></script>

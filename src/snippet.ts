@@ -8,11 +8,14 @@ declare global {
 
 if (typeof document !== 'undefined') {
   const script = document.currentScript as HTMLScriptElement | null;
-  const key = script?.dataset.writeKey;
+  // data-publishable-key; data-write-key is its old name and still works.
+  const publishableKey = script?.dataset.publishableKey;
+  const writeKey = script?.dataset.writeKey;
   const endpoint = script?.dataset.endpoint;
-  if (key && endpoint) {
+  if ((publishableKey || writeKey) && endpoint) {
     window.untitledAnalytics = new Analytics({
-      writeKey: key,
+      publishableKey,
+      writeKey,
       endpoint,
       crossSubdomainCookies: script?.dataset.crossSubdomain !== 'false',
       requireConsent: script?.dataset.requireConsent === 'true',
