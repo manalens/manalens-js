@@ -197,6 +197,17 @@ for one year, so later page loads send nothing. `optIn()` removes the flag and
 creates a new anonymous ID. `disabled: true` turns the SDK off for one instance
 and does not touch browser storage.
 
+## Players who come from your game
+
+A game that uses the Untitled Analytics Godot SDK can open your website with `UntitledAnalytics.link_url(url)`. The link has a `ua_hid` parameter: the game's anonymous ID and the time the game made the link.
+
+When the page loads, the SDK:
+
+1. Removes `ua_hid` from the address bar (`history.replaceState`). Other parameters and the hash stay.
+2. Sends one `track` event `identity_handoff` with `source_anonymous_id` (the game's ID) and `handoff_at` (unix seconds).
+
+Untitled Analytics then counts the browser and the game install as one person, without `identify()`. The collector accepts a handoff for 10 minutes only, so a link that a player shares does not join other people. In consent mode the event waits for `setConsent(true)`. `setConsent(false)`, `optOut()` and `reset()` drop it. No setup is needed on the website.
+
 ## Optional consent mode
 
 Default behaviour is the persistent first-party ID above. EU sites, or any site
