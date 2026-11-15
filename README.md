@@ -29,7 +29,7 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
   src="https://cdn.jsdelivr.net/npm/@untitled-analytics/web@0.4.0/dist/snippet.global.js"
   integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
   crossorigin="anonymous"
-  data-write-key="YOUR_WRITE_KEY"
+  data-write-key="YOUR_PUBLISHABLE_KEY"
   data-endpoint="https://YOUR_COLLECTOR_ENDPOINT"
   defer
 ></script>
@@ -90,7 +90,7 @@ consent before analytics storage can use the optional consent mode below.
 import { createAnalytics } from '@untitled-analytics/web';
 
 const analytics = createAnalytics({
-  writeKey: 'site_public_key',
+  writeKey: 'YOUR_PUBLISHABLE_KEY',
   endpoint: 'https://api.example.com',
   // crossSubdomainCookies: false, // optional: host-only cookies (default true)
 });
@@ -101,7 +101,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `writeKey` | required | Public write key for one site |
+| `writeKey` | required | The project publishable key (`ua_pk_...`; older projects: `ua_...`). Safe to ship in a page or a game build. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`) throws an error. |
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), `popstate` and `ua:navigate` |
@@ -112,6 +112,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `requireConsent` | `false` | Consent mode; see below |
 | `tracking` | none | `{ excludeHosts, excludePaths, excludeTimezones }`; see [Tracking rules](#tracking-rules) |
 | `disabled` | `false` | No events and no browser storage |
+| `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
 
 **Delivery.** Events wait in memory (never in browser storage) and are sent in
 batches. After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
@@ -222,12 +223,49 @@ consentManager.onChange(granted => analytics.setConsent(granted));
 `setConsent()` also works without `requireConsent`: `setConsent(false)` then
 turns identity off for that instance.
 
+## Browser and Electron games
+
+A game that runs in a browser or in Electron (three.js, Phaser, PixiJS,
+Babylon) can set the `app` option. Every event then carries `context.app` next
+to `context.page`, and the channel stays `web`. The App filters and breakdowns
+(platform, storefront, version, build, engine) and "errors by build" read it.
+Device, OS and browser still come from the browser user agent.
+
+```ts
+const analytics = createAnalytics({
+  writeKey: 'YOUR_PUBLISHABLE_KEY',
+  endpoint: 'https://api.example.com',
+  app: { platform: 'web', storefront: 'itch', app_version: '1.4.0', build: '571', engine: 'other' },
+});
+analytics.track('game_open', { is_first_open: true });
+```
+
+| Field | Values |
+| --- | --- |
+| `platform` | required: `windows`, `macos`, `linux`, `web`, `android`, `ios`, `other` |
+| `storefront` | `steam`, `itch`, `epic`, `gog`, `app_store`, `play`, `other` |
+| `app_version` | 1 to 32 characters: letters, digits, `.`, `_`, `+`, `-` and space |
+| `build` | 1 to 64 characters, same characters as `app_version` |
+| `engine` | `godot`, `unity`, `unreal`, `other` |
+
+These are the collector's own rules. An invalid object would make the collector
+refuse every event, so the SDK drops it, writes one `console.warn`, and sends
+plain web events. The SDK sends a copy: later changes to the object do nothing.
+
+Snippet: `data-app-platform` (required for the others to apply),
+`data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`.
+
+For the standard game events (`game_open`, `session_start`, `session_end`,
+`error`, `app_unclean_exit`, `game_updated`), see the analytics docs
+`docs/sdks/app-events.mdx`, section "Browser and Electron games".
+
 ## Snippet attributes
 
-`data-write-key` and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
+`data-write-key` (the publishable key) and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
 `data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
 `data-require-consent="true"` for consent mode and call
-`window.untitledAnalytics.setConsent(true)` from your banner.
+`window.untitledAnalytics.setConsent(true)` from your banner. Add the
+`data-app-*` attributes for a browser game (see above).
 
 ## Pageviews
 

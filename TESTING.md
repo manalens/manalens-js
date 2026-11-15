@@ -1,6 +1,6 @@
 # SDK tests
 
-On 2026-11-08, `pnpm typecheck` and all 43 tests in `pnpm test:example` passed.
+On 2026-11-16, `pnpm typecheck` and all 65 tests in `pnpm test:example` passed.
 GitHub Actions runs both on pull requests and main.
 
 The examples build the actual ESM and browser bundles. Tests cover page/custom
@@ -12,7 +12,8 @@ optional consent mode (`requireConsent`, `setConsent`, `data-require-consent`),
 failed in-flight batches after `reset()`, `setConsent(false)` (also then `true`), `optOut()` (also then `optIn()`), deletion and
 opt-out persistence before consent, sanitized
 URLs/referrers, route changes, retry identity, disabled tracking (no storage
-access) and validation, pagehide keepalive flush, and lifecycle cleanup.
+access) and validation, the `app` option and `data-app-*` attributes (valid,
+invalid and dropped with a warning), publishable key prefix checks, pagehide keepalive flush, and lifecycle cleanup.
 
 ```sh
 pnpm typecheck
