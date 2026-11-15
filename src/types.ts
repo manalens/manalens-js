@@ -1,5 +1,6 @@
 import type { TrackingOptions } from './tracking';
 import type { acquisitionKeys } from './attribution-contract';
+import type { AppInfo } from './app';
 export type Traits = Record<string, string | number | boolean | null>;
 
 /** The browser portion of Formo's event envelope. */
@@ -25,6 +26,8 @@ export interface AnalyticsEvent {
     /** Formo-style SDK identification. */
     library_name?: string;
     library_version?: string;
+    /** Set from the `app` option on every event (browser and Electron games). */
+    app?: AppInfo;
   };
   properties: Record<string, string | number | boolean | null>;
   /** Persistent first-party browser ID (UUID). Absent only in consent mode before consent. */
@@ -38,7 +41,12 @@ export interface AnalyticsEvent {
 }
 
 export interface AnalyticsOptions {
-  /** Public write key for one site. The server resolves this to project_id. */
+  /**
+   * The project publishable key (`ua_pk_...`, or `ua_...` on older projects).
+   * It is public and safe in a page or a game build. The server resolves it to
+   * the project. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`)
+   * is refused: never put those in browser code.
+   */
   writeKey: string;
   endpoint: string;
   /**
@@ -69,4 +77,11 @@ export interface AnalyticsOptions {
   tracking?: TrackingOptions;
   /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
+  /**
+   * App context for a browser or Electron game, sent as `context.app` on every
+   * event next to `context.page` (the channel stays `web`). It feeds the App
+   * filters and breakdowns (platform, storefront, version, build, engine). An
+   * invalid object is dropped with a console warning.
+   */
+  app?: AppInfo;
 }

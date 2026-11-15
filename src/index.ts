@@ -4,6 +4,7 @@ import { clearAnonymousId, clearSessionId, clearUserId, generateAnonymousId, rea
 import { storageKey } from './storage';
 import { hostExcluded, pathExcluded, timezoneExcluded } from './tracking';
 import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
+import { resolveAppInfo, type AppInfo } from './app';
 
 /** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
 export const LIBRARY_NAME = 'Untitled Analytics Web SDK';
@@ -11,6 +12,11 @@ export const LIBRARY_VERSION = '0.4.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 export type { TrackingOptions } from './tracking';
+export type { AppInfo } from './app';
+export { appPlatforms, appStorefronts, appEngines } from './app';
+
+/** Key prefixes that must never be used in browser code (secret key, API keys). */
+const privateKeyPrefixes = ['ua_sk_', 'ua_api_', 'ua_mcp_'];
 
 type ResolvedOptions = AnalyticsOptions & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
@@ -26,6 +32,8 @@ const clamp = (value: number | undefined, min: number, max: number, fallback: nu
 
 export class Analytics {
   private readonly options: ResolvedOptions;
+  /** The validated `app` option, sent as context.app on every event. */
+  private readonly app?: AppInfo;
   private pending: AnalyticsEvent[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private previousPath?: string;
@@ -77,6 +85,8 @@ export class Analytics {
 
   constructor(options: AnalyticsOptions) {
     if (!options.writeKey || !options.endpoint) throw new Error('writeKey and endpoint are required');
+    if (privateKeyPrefixes.some(prefix => options.writeKey.startsWith(prefix))) throw new Error('writeKey must be the publishable key (ua_pk_...). Never put a secret key or an API key in browser code');
+    this.app = resolveAppInfo(options.app);
     this.options = {
       autoPageviews: true,
       batchSize: 10,
@@ -271,7 +281,7 @@ export class Analytics {
       channel: 'web',
       version: LIBRARY_VERSION,
       original_timestamp: originalTimestamp,
-      context: { ...(context ?? this.captureContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION },
+      context: { ...(context ?? this.captureContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION, ...(this.app ? { app: this.app } : {}) },
       properties,
       ...(this.identityAllowed() ? {
         anonymous_id: generateAnonymousId(this.keys.anonymousId, cross),
