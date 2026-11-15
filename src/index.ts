@@ -49,6 +49,8 @@ export class Analytics {
   private consent?: boolean;
   /** identify() made before consent, sent when consent is granted. */
   private deferredIdentify?: Traits;
+  /** A game handoff (`ua_hid`) read on load, sent once identity is allowed (P-2523). */
+  private handoff?: Handoff;
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
   private acquisition?: AnalyticsEvent['context'];
   private acquisitionDay?: string;
@@ -100,13 +102,16 @@ export class Analytics {
     const key = (name: string) => storageKey(this.options.writeKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
     if (typeof window === 'undefined' || this.options.disabled) return;
+    // A game's handoff parameter leaves the address bar at once, so it is not
+    // bookmarked, shared or sent as part of any URL.
+    this.handoff = takeHandoff();
     // In consent mode, no cookie or localStorage is touched until setConsent(true).
     // The opt-out flag is a strictly necessary preference: honour it in every mode.
     this.optedOut = readOptOut(this.keys.optOut);
     // An excluded timezone is visitor-level: nothing is sent, nothing stored,
     // and an existing identity is deleted (deletion needs no consent).
     this.timezoneExcluded = timezoneExcluded(this.options.tracking?.excludeTimezones);
-    if (this.timezoneExcluded) { this.clearIdentityStorage(); return; }
+    if (this.timezoneExcluded) { this.clearIdentityStorage(); this.handoff = undefined; return; }
     // On an excluded host or path, no identity is written until an allowed page.
     if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation
@@ -115,6 +120,7 @@ export class Analytics {
     this.timer = setInterval(() => { void this.flushDue(); }, this.options.flushIntervalMs);
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
+    this.sendHandoff();
     if (this.options.autoPageviews) {
       this.page();
       this.historyPathname = location.pathname;
@@ -170,6 +176,7 @@ export class Analytics {
     if (typeof window === 'undefined' || this.options.disabled) return;
     if (granted) {
       this.loadIdentity();
+      this.sendHandoff();
       const traits = this.deferredIdentify;
       this.deferredIdentify = undefined;
       // On an excluded page, keep the identify until the visitor reaches an allowed page.
@@ -183,6 +190,7 @@ export class Analytics {
     this.clearIdentityStorage();
     this.userId = undefined;
     this.deferredIdentify = undefined;
+    this.handoff = undefined;
     this.pending = stripIdentity(this.pending);
   }
 
@@ -191,6 +199,7 @@ export class Analytics {
     this.identityGeneration++;
     this.userId = undefined;
     this.deferredIdentify = undefined;
+    this.handoff = undefined;
     // Deletion needs no consent, so storage is cleared in every mode.
     if (typeof window === 'undefined' || this.options.disabled) return;
     this.clearIdentityStorage();
@@ -229,6 +238,20 @@ export class Analytics {
   getUserId(): string | undefined { return this.userId; }
   getAnonymousId(): string | undefined {
     return this.active() && this.identityAllowed() && !this.pageExcluded() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
+  }
+
+  /**
+   * Send the game handoff once: a `track` event `identity_handoff` with the
+   * game's anonymous ID and the time the game made the link. It waits for
+   * consent and for an allowed page; it is dropped after opt-out, reset() or
+   * setConsent(false), and when the game ID is this browser's own ID.
+   */
+  private sendHandoff(): void {
+    const handoff = this.handoff;
+    if (!handoff || !this.active() || !this.identityAllowed() || this.pageExcluded()) return;
+    this.handoff = undefined;
+    if (handoff.source === this.getAnonymousId()) return;
+    this.enqueue('track', HANDOFF_EVENT, { source_anonymous_id: handoff.source, handoff_at: handoff.at });
   }
 
   private identityAllowed(): boolean {
@@ -398,6 +421,25 @@ export class Analytics {
 /** 408 Request Timeout, 429 Too Many Requests and 5xx are worth another try. */
 function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
+
+/** Game to website identity handoff (P-2523): `?ua_hid=<game anonymous ID>.<unix seconds>`. */
+const HANDOFF_PARAM = 'ua_hid';
+const HANDOFF_EVENT = 'identity_handoff';
+const HANDOFF = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(\d{1,12})$/i;
+type Handoff = { source: string; at: number };
+
+/** Read `ua_hid` and remove it from the address bar (other parameters and the hash stay). */
+function takeHandoff(): Handoff | undefined {
+  if (typeof location === 'undefined') return undefined;
+  let url: URL;
+  try { url = new URL(location.href); } catch { return undefined; }
+  const raw = url.searchParams.get(HANDOFF_PARAM);
+  if (raw === null) return undefined;
+  url.searchParams.delete(HANDOFF_PARAM);
+  try { history.replaceState(history.state, '', url.toString()); } catch { /* no history API */ }
+  const match = HANDOFF.exec(raw);
+  return match ? { source: match[1].toLowerCase(), at: Number(match[2]) } : undefined;
 }
 
 /** Dispatched on window after history.pushState / replaceState. */
