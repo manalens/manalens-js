@@ -839,3 +839,81 @@ test('identify() while opted out is a no-op, and optIn() starts without a user I
     assert.equal(after.user_id, undefined);
   } finally { sdk.destroy(); }
 });
+
+const gameId = '22222222-2222-4222-8222-222222222222';
+test('game handoff: ua_hid leaves the address bar and one identity_handoff event joins the game ID', async t => {
+  browser(`https://example.com/wiki?tab=boss&ua_hid=${gameId.toUpperCase()}.1794784346#drops`);
+  const history = fakeHistory(); globalThis.history = history;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    assert.equal(globalThis.location.href, 'https://example.com/wiki?tab=boss#drops');
+    assert.deepEqual(history.calls, [['replace', 'https://example.com/wiki?tab=boss#drops']]);
+    await sdk.flush();
+    const events = eventsOf(sent);
+    const handoff = events.filter(event => event.event === 'identity_handoff');
+    assert.equal(handoff.length, 1);
+    assert.deepEqual(handoff[0].properties, { source_anonymous_id: gameId, handoff_at: 1794784346 });
+    assert.equal(handoff[0].anonymous_id, sdk.getAnonymousId());
+    assert.ok(events.every(event => !JSON.stringify(event).includes('ua_hid')), 'no event carries the parameter');
+    // A reload (same page, no parameter) sends no second handoff.
+    const again = new Analytics({ writeKey: 'ua_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+    await again.flush(); again.destroy();
+    assert.equal(eventsOf(sent).filter(event => event.event === 'identity_handoff').length, 1);
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('game handoff: waits for consent, and is dropped by setConsent(false), opt-out or a malformed value', async t => {
+  browser(`https://consent.com/?ua_hid=${gameId}.1794784346`);
+  globalThis.history = fakeHistory();
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  let sdk = make({ writeKey: 'ua_handoff_consent', requireConsent: true });
+  try {
+    await sdk.flush();
+    assert.equal(globalThis.location.search, '', 'removed before consent too');
+    assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false);
+    sdk.setConsent(true); await sdk.flush();
+    const [handoff] = eventsOf(sent).filter(event => event.event === 'identity_handoff');
+    assert.match(handoff.anonymous_id, uuid);
+    assert.equal(handoff.properties.source_anonymous_id, gameId);
+    sdk.destroy();
+
+    sent.length = 0;
+    browser(`https://withdraw.com/?ua_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
+    sdk = make({ writeKey: 'ua_handoff_withdraw', requireConsent: true });
+    sdk.setConsent(false); sdk.setConsent(true); await sdk.flush();
+    assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'withdrawn consent drops the handoff');
+    sdk.destroy();
+
+    browser(`https://optout.com/?ua_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
+    sdk = make({ writeKey: 'ua_handoff_optout', requireConsent: true });
+    sdk.optOut(); sdk.optIn(); sdk.setConsent(true); await sdk.flush();
+    assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'opt-out drops the handoff');
+    sdk.destroy();
+
+    for (const value of ['not-an-id', `${gameId}`, `${gameId}.abc`]) {
+      browser(`https://bad.com/?ua_hid=${encodeURIComponent(value)}&q=1`); globalThis.history = fakeHistory();
+      sdk = make({ writeKey: 'ua_handoff_bad' });
+      await sdk.flush();
+      assert.equal(globalThis.location.search, '?q=1', value);
+      assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, value);
+      sdk.destroy();
+    }
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('game handoff: an own ID is ignored, and the URL is unchanged without the parameter', async t => {
+  const jar = cookieJar();
+  browser('https://self.com/', { jar });
+  globalThis.history = fakeHistory();
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  let sdk = make({ writeKey: 'ua_handoff_self' });
+  const own = sdk.getAnonymousId(); sdk.destroy();
+  assert.deepEqual(globalThis.history.calls, [], 'no replaceState without the parameter');
+  browser(`https://self.com/?ua_hid=${own}.1794784346`, { jar }); globalThis.history = fakeHistory();
+  sdk = make({ writeKey: 'ua_handoff_self' });
+  try {
+    await sdk.flush();
+    assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false);
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
