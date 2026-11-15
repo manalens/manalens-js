@@ -7,7 +7,7 @@ Ported from `@formo/analytics-node` without the wallet code.
 ## Modes
 
 - `server` (default): a backend or a dedicated game server. Uses the **secret key** (`ua_sk_...`). Events have `channel: 'server'`. At most 100 events in a batch.
-- `app`: the Electron main process, or a process on the player's machine. Uses the **Publishable key** (`ua_pk_...`, or a legacy `ua_...` key). API keys (`ua_api_`, `ua_mcp_`) are refused in both modes. Events have `channel: 'app'` and `context.app`. At most 50 events in a batch.
+- `app`: the Electron main process, or a process on the player's machine. Uses the **Publishable key** (`ua_pk_...`, or a legacy `ua_...` key), sent in the `x-publishable-key` header. API keys (`ua_api_`, `ua_mcp_`) are refused in both modes. Events have `channel: 'app'` and `context.app`. At most 50 events in a batch.
 
 > Never put the secret key in a game build, a web page or an Electron app. The SDK refuses a secret key in app mode.
 

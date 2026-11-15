@@ -91,7 +91,7 @@ export class UntitledAnalytics {
       url: eventsUrl(options.endpoint),
       headers: mode === 'server'
         ? { authorization: `Bearer ${key}`, 'user-agent': `untitled-analytics-node/${SDK_VERSION}` }
-        : { 'x-write-key': key, 'user-agent': `untitled-analytics-node/${SDK_VERSION}` },
+        : { 'x-publishable-key': key, 'user-agent': `untitled-analytics-node/${SDK_VERSION}` },
       maxBatch: MAX_BATCH[mode],
       flushAt: options.flushAt,
       flushInterval: options.flushInterval,
