@@ -266,7 +266,7 @@ jobs:
             echo
             echo "## Install (CDN)"
             echo
-            echo "Replace the write key and endpoint with your own values."
+            echo "Replace the publishable key and endpoint with your own values."
             echo
             echo '```html'
             cat snippet.html
