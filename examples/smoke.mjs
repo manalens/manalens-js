@@ -917,3 +917,77 @@ test('game handoff: an own ID is ignored, and the URL is unchanged without the p
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false);
   } finally { sdk.destroy(); delete globalThis.history; }
 });
+
+// P-2516: optional app context for browser and Electron games.
+const gameApp = { platform: 'web', storefront: 'itch', app_version: '1.4.0', build: '571', engine: 'other' };
+
+test('app option: every event carries context.app next to context.page; the channel stays web', async t => {
+  browser('https://game.example/play');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: gameApp });
+  try {
+    sdk.track('game_open', { is_first_open: true });
+    await sdk.identify('player-1', { plan: 'free' });
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(events.map(event => event.type).sort(), ['identify', 'page', 'track']);
+    for (const event of events) {
+      assert.equal(event.channel, 'web');
+      assert.deepEqual(event.context.app, gameApp);
+      assert.equal(event.context.page.path, '/play');
+    }
+  } finally { sdk.destroy(); }
+});
+
+test('app option: an invalid object is dropped with a warning and events are sent without context.app', async t => {
+  const invalid = [
+    'web', [], { storefront: 'steam' }, { platform: 'nintendo' }, { platform: 'web', storefront: 'humble' }, { platform: 'web', engine: 'phaser' },
+    { platform: 'web', build: 'bad/build' }, { platform: 'web', build: '' }, { platform: 'web', build: 'x'.repeat(65) }, { platform: 'web', app_version: 'x'.repeat(33) },
+    { platform: 'web', app_version: 1 }, { platform: 'web', extra: 1 },
+  ];
+  for (const app of invalid) {
+    browser('https://game.example/');
+    const sent = []; const fetchMock = t.mock.method(globalThis, 'fetch', collector(sent));
+    const warn = t.mock.method(console, 'warn', () => {});
+    const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
+    try {
+      await sdk.flush();
+      assert.equal(warn.mock.callCount(), 1, JSON.stringify(app));
+      assert.match(warn.mock.calls[0].arguments[0], /app option is ignored/);
+      assert.equal(eventsOf(sent)[0].context.app, undefined);
+    } finally { sdk.destroy(); warn.mock.restore(); fetchMock.mock.restore(); }
+  }
+});
+
+test('app option: the longest valid labels pass, and a copy is sent (later changes to the object are ignored)', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const app = { platform: 'windows', app_version: `${'1'.repeat(31)}+`, build: 'Build 2026.11.16 rc-1_a'.padEnd(64, 'x') };
+  const sdk = new Analytics({ writeKey: 'ua_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app });
+  try {
+    app.platform = 'nintendo';
+    await sdk.flush();
+    assert.equal(eventsOf(sent)[0].context.app.platform, 'windows');
+    assert.equal(eventsOf(sent)[0].context.app.build.length, 64);
+  } finally { sdk.destroy(); }
+});
+
+test('snippet data-app-* attributes set the app context', async () => {
+  const { window, document } = browser('https://game.example/');
+  document.currentScript = { dataset: { writeKey: 'ua_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', appStorefront: 'itch', appVersion: '1.4.0', appBuild: '571', appEngine: 'other' } };
+  const sent = [];
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, console, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
+  await window.untitledAnalytics.flush();
+  assert.deepEqual(sent[0].events[0].context.app, gameApp);
+  assert.equal(sent[0].events[0].channel, 'web');
+  window.untitledAnalytics.destroy();
+});
+
+test('writeKey takes the publishable key: ua_pk_ and older ua_ keys pass; secret and API keys are refused', () => {
+  browser('https://example.com/');
+  for (const writeKey of ['ua_pk_abc', 'ua_ddkueCnj_bij17faLH4j7s-C__bNAL6Y']) new Analytics({ writeKey, endpoint: 'https://collector.example', disabled: true }).destroy();
+  for (const writeKey of ['ua_sk_abc', 'ua_api_abc', 'ua_mcp_abc']) {
+    assert.throws(() => new Analytics({ writeKey, endpoint: 'https://collector.example', disabled: true }), /publishable key/, writeKey);
+  }
+});
