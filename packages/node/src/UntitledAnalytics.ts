@@ -120,8 +120,15 @@ export class UntitledAnalytics {
     return this.anonymousId;
   }
 
-  /** App mode: the current session ID. */
+  /**
+   * App mode: the current session ID. Before the first event, or after 30
+   * minutes without events, this starts a new session, so the value always
+   * matches the session_id of the next event. Server mode: undefined.
+   */
   getSessionId(): string | undefined {
+    if (this.mode !== 'app') return this.sessionId;
+    const now = Date.now();
+    if (!this.fixedSession && (!this.sessionId || now - this.lastEventAt > SESSION_TIMEOUT_MS)) { this.sessionId = randomUUID(); this.lastEventAt = now; }
     return this.sessionId;
   }
 
