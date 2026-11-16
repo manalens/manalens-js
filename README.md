@@ -104,20 +104,78 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `publishableKey` | required | The project publishable key (`ua_pk_...`; older projects: `ua_...`). Safe to ship in a page or a game build. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`) throws an error. Sent in the `x-publishable-key` header. `writeKey` is its old name and still works (deprecated); giving both with different values throws an error. |
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
-| `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), `popstate` and `ua:navigate` |
+| `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `ua:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
 | `batchSize` | `10` | Events per request |
 | `flushIntervalMs` | `5000` | Flush timer |
 | `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
 | `maxQueueSize` | `512000` | Queue limit in bytes (200 to 500 KB). The oldest events are dropped first. |
 | `requireConsent` | `false` | Consent mode; see below |
-| `tracking` | none | `{ excludeHosts, excludePaths, excludeTimezones }`; see [Tracking rules](#tracking-rules) |
+| `tracking` | `true` | `false` is the same as `disabled: true`. An object sets rules: `{ excludeHosts, excludePaths, excludeTimezones, excludeQueryParams }`; see [Tracking rules](#tracking-rules) |
 | `disabled` | `false` | No events and no browser storage |
+| `logger` | off | `{ enabled: true, levels?: ['trace', 'debug', 'info', 'warn', 'error'] }`; see [Logging](#logging). Snippet: `data-debug="true"` |
+| `ready` | none | `(analytics) => void`, called once at the end of the constructor (also when disabled). Snippet: the `untitled-analytics:ready` event |
+| `errorHandler` | none | `(error) => void`, called when events are dropped: refused by the collector, or a server error after `retryCount` retries. See [Delivery errors](#delivery-errors) |
 | `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
 
 **Delivery.** Events wait in memory (never in browser storage) and are sent in
 batches. After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
 A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
+
+### Delivery errors
+
+`errorHandler` gets a `SendError` (`name`, `message`, `status`, `dropped`)
+when events are dropped:
+
+- The collector refused the batch (a 4xx other than 408 and 429, for example
+  `401` for a wrong key or `403` for a page off the project domain).
+- A server error (408, 429, 5xx) repeated more than `retryCount` times.
+
+Network errors (offline) do not call it: those events wait in memory and go
+out when the network is back. An error thrown in the handler is caught.
+
+```ts
+createAnalytics({ publishableKey, endpoint, errorHandler: error => reportToSentry(error) });
+```
+
+### Logging
+
+Logging is off by default. `logger: { enabled: true }` prints every level;
+add `levels` to choose. The list is matched exactly, like Formo's SDK:
+`levels: ['warn']` prints warnings only, not errors. The snippet attribute
+`data-debug="true"` turns on every level.
+
+| Level | What it prints |
+| --- | --- |
+| `info` | Start (with `autoPageviews` and consent mode), disabled, excluded timezone, opt-out |
+| `debug` | Each queued event (type and event name), each sent batch (count), events not sent on an excluded host or path |
+| `warn` | A failed send that will be retried (status or network error), a full queue that dropped an event |
+| `error` | Events dropped (refused, or out of retries) |
+| `trace` | Nothing at the moment |
+
+Logs never contain property values, traits, user IDs or keys.
+
+### Ready callback
+
+`ready` runs once, at the end of the constructor, with the instance. It runs
+also when the SDK is disabled. An error thrown in it is caught and logged.
+
+```ts
+createAnalytics({ publishableKey, endpoint, ready: analytics => analytics.track('app_loaded') });
+```
+
+The snippet makes `window.untitledAnalytics` and then dispatches
+`untitled-analytics:ready` on `window` (`event.detail` is the instance). Add
+the listener before the snippet runs, or check `window.untitledAnalytics`
+first:
+
+```html
+<script>
+  function onAnalytics(analytics) { analytics.track('app_loaded'); }
+  if (window.untitledAnalytics) onAnalytics(window.untitledAnalytics);
+  else window.addEventListener('untitled-analytics:ready', function (event) { onAnalytics(event.detail); }, { once: true });
+</script>
+```
 
 ### Tracking rules
 
@@ -130,9 +188,13 @@ createAnalytics({
     excludeHosts: ['localhost', 'staging.example.com', '*.vercel.app'],
     excludePaths: ['/admin/*', '/internal'],
     excludeTimezones: ['Europe/London'],
+    excludeQueryParams: ['ref'],
   },
 });
 ```
+
+`tracking: false` turns the SDK off (the same as `disabled: true`), and
+`tracking: true` is the default. For example, `tracking: process.env.NODE_ENV === 'production'`.
 
 - `excludeHosts`: exact hostnames, or `*.` for every subdomain (`*.vercel.app`
   does not match `vercel.app` itself). Case-insensitive.
@@ -150,7 +212,14 @@ createAnalytics({
   their renamed forms (for example `Asia/Kolkata` and `Asia/Calcutta`).
 - An `identify()` on an excluded page is held and sent with the first event on
   an allowed page. A campaign from an excluded landing page is not carried.
-- Unlike Formo's SDK, `localhost` is tracked unless you exclude it.
+- `excludeQueryParams`: query parameter names the SDK never reads,
+  case-insensitive. The SDK never sends a full query string or fragment: page
+  URLs are origin and path, and a referrer is an origin. It reads only the
+  campaign parameters (see [Ad and campaign attribution](#ad-and-campaign-attribution)).
+  Name one here to keep it out of every event, for example `['ref']` or
+  `['gclid']`.
+- Unlike Formo's SDK, `localhost` is tracked unless you exclude it. Use
+  `excludeHosts: ['localhost']` or `tracking: false` in development.
 
 ### Methods
 
@@ -276,21 +345,58 @@ For the standard game events (`game_open`, `session_start`, `session_end`,
 `data-write-key` still works. The snippet shares identity across subdomains by default. Add
 `data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
 `data-require-consent="true"` for consent mode and call
-`window.untitledAnalytics.setConsent(true)` from your banner. Add the
-`data-app-*` attributes for a browser game (see above).
+`window.untitledAnalytics.setConsent(true)` from your banner. Add
+`data-auto-pageviews="false"` to send no automatic page views (call
+`window.untitledAnalytics.page()` yourself). Add `data-debug="true"` for
+console logs. Add the `data-app-*` attributes for a browser game (see above).
+
+| Attribute | Option |
+| --- | --- |
+| `data-publishable-key` (old name: `data-write-key`) | `publishableKey` (required) |
+| `data-endpoint` | `endpoint` (required) |
+| `data-cross-subdomain="false"` | `crossSubdomainCookies: false` |
+| `data-require-consent="true"` | `requireConsent: true` |
+| `data-auto-pageviews="false"` | `autoPageviews: false` |
+| `data-debug="true"` | `logger: { enabled: true }` |
+| `data-app-platform`, `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine` | `app` |
+
+Other options (`tracking`, `batchSize`, `ready`, `errorHandler` ...) need the
+npm package.
 
 ## Pageviews
 
-`page()` tracks the current page. By default the SDK also sends an initial
-pageview and a pageview on each SPA navigation: it wraps `history.pushState`
-and `replaceState` (once, however many instances there are) and listens for
-`popstate`. Next.js, React Router, Vue Router and SvelteKit work without code.
-A navigation sends a pageview only when the path changes, so a query-only
-`replaceState` (filters, tabs) sends none. The SDK waits one tick so the new
-`document.title` is used. For a router that changes the page in another way,
-dispatch `window.dispatchEvent(new Event('ua:navigate'))` or call
-`analytics.page()`. `destroy()` clears pending events and listeners. The SDK sends only URL origin and path; query
-strings and fragments are omitted, while selected UTM fields are sanitized.
+`page(properties?)` tracks the current page. Without properties, it sends
+nothing when the path and query are the same as the last page view. With
+properties, it always sends.
+
+With `autoPageviews: true` (the default) the SDK sends:
+
+- **First load**: one page view at once, with the current title.
+- **`history.pushState` / `replaceState`**: the SDK wraps both (once, however
+  many instances there are). It waits one tick so the router can set the new
+  `document.title`, then sends a page view only when the **path** changed. A
+  query-only `replaceState` (filters, tabs) and a same-URL `replaceState`
+  send none.
+- **Back and forward (`popstate`)**: the URL is new at once, but the framework
+  (Astro View Transitions, Next.js) swaps the page later. The SDK waits until
+  `document.title` changes, checked every 50 ms, for at most 1 second, then
+  reads the page fields and sends. It sends nothing when the path and query
+  are the same as the last page view (for example a hash-only change). While
+  this page view waits, a `pushState` / `replaceState` adds no page view.
+  When the page hides (`pagehide`, or `visibilitychange` to hidden), a
+  waiting page view is sent at once with the flush, so it is never lost.
+- **`ua:navigate`**: dispatch `window.dispatchEvent(new Event('ua:navigate'))`
+  after your router has shown the new page. The SDK sends at once (same
+  path-and-query rule as `page()`).
+
+Next.js, React Router, Vue Router and SvelteKit work without code. For a
+framework with its own page-load event (Astro `astro:page-load`), you can set
+`autoPageviews: false` (snippet: `data-auto-pageviews="false"`) and call
+`page()` on each event, including the first. `destroy()` clears pending
+events and listeners.
+
+The SDK sends only URL origin and path; query strings and fragments are
+omitted, while selected campaign fields are sanitized.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet or chain code. The anonymous ID, storage fallback and cookie

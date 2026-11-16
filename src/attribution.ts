@@ -2,12 +2,13 @@
 import type { AnalyticsEvent } from './types';
 import { attributionContext } from './attribution-contract';
 
-export function pageContext(pageUrl = location.href): AnalyticsEvent['context'] {
+export function pageContext(pageUrl = location.href, excludedParams: readonly string[] = []): AnalyticsEvent['context'] {
   const url = new URL(pageUrl);
   const path = url.pathname !== '/' ? url.pathname.replace(/\/+$/, '') : '/';
   // Only explicitly selected campaign parameters leave the browser. Full query
   // strings and fragments often contain emails, tokens, and other private data.
-  const campaign = attributionContext({}, url);
+  // tracking.excludeQueryParams removes parameters from that allowlist too.
+  const campaign = attributionContext({}, url, excludedParams);
   let referrer = '';
   if (document.referrer) {
     try {

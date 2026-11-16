@@ -2,7 +2,8 @@ import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
 import { storageKey } from './storage';
-import { hostExcluded, pathExcluded, timezoneExcluded } from './tracking';
+import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
+import { Logger } from './logger';
 import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 import { resolveAppInfo, type AppInfo } from './app';
 
@@ -12,6 +13,8 @@ export const LIBRARY_VERSION = '0.4.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 export type { TrackingOptions } from './tracking';
+export type { LoggerOptions, LogLevel } from './logger';
+export { logLevels } from './logger';
 export type { AppInfo } from './app';
 export { appPlatforms, appStorefronts, appEngines } from './app';
 
@@ -32,7 +35,7 @@ function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey' 
   return key;
 }
 
-type ResolvedOptions = AnalyticsOptions & { publishableKey: string } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
+type ResolvedOptions = Omit<AnalyticsOptions, 'tracking'> & { publishableKey: string; tracking?: TrackingOptions } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
 /** Queue limits, as in getformo/sdk's EventQueue. */
 const MAX_QUEUE_BYTES = 500 * 1024;
@@ -41,6 +44,23 @@ const MIN_QUEUE_BYTES = 200;
 const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+/**
+ * After back or forward (popstate), the framework swaps the page later: Astro
+ * View Transitions and Next.js first load or render the page you go to. The
+ * SDK waits until document.title changes, checked every POPSTATE_POLL_MS, for
+ * at most POPSTATE_MAX_WAIT_MS, then reads the page fields and sends.
+ */
+const POPSTATE_POLL_MS = 50;
+const POPSTATE_MAX_WAIT_MS = 1000;
+
+/** A failed send whose events were dropped; given to the errorHandler option. */
+export class SendError extends Error {
+  constructor(message: string, readonly status: number, readonly dropped: number) {
+    super(message);
+    this.name = 'SendError';
+  }
+}
+
 const clamp = (value: number | undefined, min: number, max: number, fallback: number) =>
   typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
 
@@ -68,11 +88,26 @@ export class Analytics {
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
   private acquisition?: AnalyticsEvent['context'];
   private acquisitionDay?: string;
-  private readonly onPageHide = () => { void this.flush(true); };
+  private readonly logger: Logger;
+  /** A page view that waits for the framework to update the page; sent at once when the page hides. */
+  private pendingPage?: { kind: 'popstate' | 'history'; timer: ReturnType<typeof setTimeout>; send: () => void };
+  private readonly onPageHide = () => { this.sendPendingPage(); void this.flush(true); };
   private readonly onVisibilityChange = () => {
-    if (document.visibilityState === 'hidden') void this.flush(true);
+    if (document.visibilityState === 'hidden') { this.sendPendingPage(); void this.flush(true); }
   };
+  /** `ua:navigate`: the app says the new page is ready, so send at once. */
   private readonly onNavigation = () => { this.page(); };
+  /**
+   * Back or forward. The URL is already new, but the framework has not yet
+   * swapped the page (title and content). Wait for the title to change (at
+   * most POPSTATE_MAX_WAIT_MS), then send. page() skips the path and query it
+   * sent last, so a hash-only change sends nothing.
+   */
+  private readonly onPopState = () => {
+    // A pushState page view that still waits is for an earlier page: send it first.
+    if (this.pendingPage?.kind === 'history') this.sendPendingPage();
+    this.deferPage('popstate', () => this.page(), true);
+  };
   /** Server-error attempts per message_id (network errors are not counted). */
   private readonly attempts = new Map<string, number>();
   /** Serialized size per queued event, computed once. */
@@ -82,33 +117,36 @@ export class Analytics {
   private backoffStep = 0;
   /** The pathname of the last pageview sent for a pushState / replaceState navigation. */
   private historyPathname?: string;
-  private historyTimer?: ReturnType<typeof setTimeout>;
   /**
    * pushState / replaceState (SPA routers). Wait one tick so the router can set
    * the new document.title, then send a pageview only when the path changed:
    * a query-only replaceState (filters, tabs) and a same-URL replaceState on
-   * hydration send none.
+   * hydration send none. While a back / forward page view waits, it covers the
+   * current URL, so a history change (for example a router that saves the
+   * scroll position with replaceState) adds nothing.
    */
   private readonly onHistoryChange = () => {
-    if (this.historyTimer) clearTimeout(this.historyTimer);
-    this.historyTimer = setTimeout(() => {
-      this.historyTimer = undefined;
-      if (this.stopped || location.pathname === this.historyPathname) return;
+    if (this.pendingPage?.kind === 'popstate') return;
+    this.deferPage('history', () => {
+      if (location.pathname === this.historyPathname) return;
       this.historyPathname = location.pathname;
       this.page();
-    }, 0);
+    }, false);
   };
 
   constructor(options: AnalyticsOptions) {
     if (!options.endpoint) throw new Error('publishableKey and endpoint are required');
     const publishableKey = resolvePublishableKey(options);
     this.app = resolveAppInfo(options.app);
+    this.logger = new Logger(options.logger);
     this.options = {
       autoPageviews: true,
       batchSize: 10,
       flushIntervalMs: 5000,
-      disabled: false,
       ...options,
+      // tracking: false is the same as disabled: true (Formo's boolean form).
+      disabled: options.disabled === true || options.tracking === false,
+      tracking: typeof options.tracking === 'object' && options.tracking !== null ? options.tracking : undefined,
       publishableKey,
       crossSubdomainCookies: options.crossSubdomainCookies !== false,
       retryCount: clamp(options.retryCount, 0, 10, 3),
@@ -116,7 +154,15 @@ export class Analytics {
     };
     const key = (name: string) => storageKey(this.options.publishableKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
-    if (typeof window === 'undefined' || this.options.disabled) return;
+    this.start();
+    if (options.ready) {
+      try { options.ready(this); } catch (error) { console.error('[Untitled Analytics] Error in the ready callback:', error); }
+    }
+  }
+
+  private start(): void {
+    if (typeof window === 'undefined') return;
+    if (this.options.disabled) { this.logger.log('info', 'Disabled: no events and no browser storage'); return; }
     // A game's handoff parameter leaves the address bar at once, so it is not
     // bookmarked, shared or sent as part of any URL.
     this.handoff = takeHandoff();
@@ -126,7 +172,7 @@ export class Analytics {
     // An excluded timezone is visitor-level: nothing is sent, nothing stored,
     // and an existing identity is deleted (deletion needs no consent).
     this.timezoneExcluded = timezoneExcluded(this.options.tracking?.excludeTimezones);
-    if (this.timezoneExcluded) { this.clearIdentityStorage(); this.handoff = undefined; return; }
+    if (this.timezoneExcluded) { this.clearIdentityStorage(); this.handoff = undefined; this.logger.log('info', 'Excluded timezone: nothing is sent'); return; }
     // On an excluded host or path, no identity is written until an allowed page.
     if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation
@@ -140,16 +186,53 @@ export class Analytics {
       this.page();
       this.historyPathname = location.pathname;
       installHistoryHooksOnce();
-      window.addEventListener('popstate', this.onNavigation);
+      window.addEventListener('popstate', this.onPopState);
       window.addEventListener('ua:navigate', this.onNavigation);
       window.addEventListener(HISTORY_EVENT, this.onHistoryChange);
     }
+    this.logger.log('info', `Initialized (autoPageviews: ${this.options.autoPageviews}, consent required: ${this.options.requireConsent === true})`);
+  }
+
+  /**
+   * Send a page view later. With waitForTitle, wait until document.title
+   * changes (at most POPSTATE_MAX_WAIT_MS); otherwise wait one tick. A new
+   * call replaces the waiting one. pagehide and visibilitychange send it at once.
+   */
+  private deferPage(kind: 'popstate' | 'history', send: () => void, waitForTitle: boolean): void {
+    this.cancelPendingPage();
+    const titleBefore = document.title;
+    let waited = 0;
+    const check = () => {
+      if (waitForTitle && document.title === titleBefore && waited < POPSTATE_MAX_WAIT_MS) {
+        waited += POPSTATE_POLL_MS;
+        pending.timer = setTimeout(check, POPSTATE_POLL_MS);
+        return;
+      }
+      this.sendPendingPage();
+    };
+    const pending = { kind, send, timer: setTimeout(check, 0) };
+    this.pendingPage = pending;
+  }
+
+  /** Send the waiting page view now (with the page fields as they are now). */
+  private sendPendingPage(): void {
+    const pending = this.pendingPage;
+    if (!pending) return;
+    this.cancelPendingPage();
+    if (!this.stopped) pending.send();
+  }
+
+  private cancelPendingPage(): void {
+    if (this.pendingPage) clearTimeout(this.pendingPage.timer);
+    this.pendingPage = undefined;
   }
 
   page(properties: AnalyticsEvent['properties'] = {}): void {
     if (typeof window === 'undefined') return;
     const path = `${location.pathname}${location.search}`;
     if (path === this.previousPath && Object.keys(properties).length === 0) return;
+    // A page view sent now replaces one that waits (for example page() on a router's page-load event).
+    this.cancelPendingPage();
     this.previousPath = path;
     this.historyPathname = location.pathname;
     this.enqueue('page', undefined, properties);
@@ -231,8 +314,10 @@ export class Analytics {
     this.identityGeneration++;
     this.optOutGeneration++;
     this.pending = [];
+    this.cancelPendingPage();
     this.reset();
     this.optedOut = true;
+    this.logger.log('info', 'Opted out');
     // Persisted in every mode: the opt-out is a strictly necessary preference.
     if (typeof window !== 'undefined' && !this.options.disabled) writeOptOut(this.keys.optOut, true, this.options.crossSubdomainCookies);
   }
@@ -293,7 +378,7 @@ export class Analytics {
 
   /** Carry one coherent acquisition touch in memory for this page lifetime. */
   private captureContext(): AnalyticsEvent['context'] {
-    const context = pageContext();
+    const context = pageContext(location.href, this.options.tracking?.excludeQueryParams);
     const day = new Date().toISOString().slice(0, 10);
     if (day !== this.acquisitionDay) { this.acquisition = undefined; this.acquisitionDay = day; }
     if (acquisitionKeys.some(key => context[key])) this.acquisition = context;
@@ -303,7 +388,8 @@ export class Analytics {
   }
 
   private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): void {
-    if (!this.active() || this.pageExcluded()) return;
+    if (!this.active()) return;
+    if (this.pageExcluded()) { this.logger.log('debug', `Not sent: ${type} on an excluded host or path`); return; }
     // An identify held back on an excluded page goes out first, on this allowed page.
     if (type !== 'identify' && this.deferredIdentify && this.userId && this.identityAllowed()) {
       const held = this.deferredIdentify;
@@ -329,6 +415,7 @@ export class Analytics {
       ...(type === 'identify' ? { traits } : {}),
     };
     this.pending.push(payload);
+    this.logger.log('debug', `Queued ${type}${event ? ` ${event}` : ''}`);
     this.limitQueue();
     if (this.pending.length >= this.options.batchSize) void this.flushDue();
   }
@@ -349,6 +436,7 @@ export class Analytics {
     let total = this.pending.reduce((sum, event) => sum + this.size(event), 0);
     while (total > this.options.maxQueueSize && this.pending.length > 1) {
       const dropped = this.pending.shift()!;
+      this.logger.log('warn', `Queue over maxQueueSize: dropped the oldest event (${dropped.type})`);
       total -= this.size(dropped);
       this.attempts.delete(dropped.message_id);
     }
@@ -391,7 +479,10 @@ export class Analytics {
       if (response.ok || !retryableStatus(response.status)) {
         // Accepted, or refused for good (400, 401, 403, 413 ...): sending it again cannot help.
         for (const event of batch) this.attempts.delete(event.message_id);
-        if (response.ok) { this.backoffStep = 0; this.retryAt = 0; }
+        if (response.ok) {
+          this.backoffStep = 0; this.retryAt = 0;
+          this.logger.log('debug', `Sent ${batch.length} event(s)`);
+        } else this.reportDropped(`The collector refused ${batch.length} event(s): HTTP ${response.status}`, response.status, batch.length);
         return;
       }
       retry = batch.filter(event => {
@@ -400,10 +491,13 @@ export class Analytics {
         this.attempts.set(event.message_id, attempts);
         return true;
       });
+      if (retry.length < batch.length) this.reportDropped(`Dropped ${batch.length - retry.length} event(s) after ${this.options.retryCount} retries: HTTP ${response.status}`, response.status, batch.length - retry.length);
+      if (retry.length) this.logger.log('warn', `Send failed with HTTP ${response.status}: ${retry.length} event(s) will be sent again`);
       this.backOff(response.headers?.get?.('retry-after'));
     } catch {
       // Network error (offline, DNS, CORS): not counted, the events wait.
       retry = batch;
+      this.logger.log('warn', `Network error: ${batch.length} event(s) wait in memory`);
       this.backOff();
     }
     // Retry in memory only; the queue is never written to browser storage.
@@ -416,15 +510,23 @@ export class Analytics {
     this.limitQueue();
   }
 
+  /** Log the drop and call the errorHandler option (an error thrown there is caught). */
+  private reportDropped(message: string, status: number, dropped: number): void {
+    this.logger.log('error', message);
+    const handler = this.options.errorHandler;
+    if (typeof handler !== 'function') return;
+    try { handler(new SendError(message, status, dropped)); } catch (error) { console.error('[Untitled Analytics] Error in the errorHandler callback:', error); }
+  }
+
   destroy(): void {
     this.identityGeneration++;
     if (this.timer) clearInterval(this.timer);
-    if (this.historyTimer) clearTimeout(this.historyTimer);
+    this.cancelPendingPage();
     if (typeof window !== 'undefined') {
       window.removeEventListener(HISTORY_EVENT, this.onHistoryChange);
       window.removeEventListener('pagehide', this.onPageHide);
       document.removeEventListener?.('visibilitychange', this.onVisibilityChange);
-      window.removeEventListener('popstate', this.onNavigation);
+      window.removeEventListener('popstate', this.onPopState);
       window.removeEventListener('ua:navigate', this.onNavigation);
     }
     this.pending = [];
