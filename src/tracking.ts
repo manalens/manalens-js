@@ -20,6 +20,14 @@ export interface TrackingOptions {
    * deleted. Case-insensitive. Best effort: a visitor can change the timezone.
    */
   excludeTimezones?: string[];
+  /**
+   * Query parameter names the SDK never reads, case-insensitive. The SDK
+   * sends no full query string: page URLs are origin and path only, and a
+   * referrer is an origin. It reads only the campaign parameters (UTM fields,
+   * click IDs, `gad_source`, `ref`, `referral`, `referral_code`). Name one of
+   * them here to keep it out of every event, for example `['ref']`.
+   */
+  excludeQueryParams?: string[];
 }
 
 /** Collapse repeated slashes, decode percent-escapes and drop a trailing slash, so `/%61dmin//x/` equals `/admin/x`. */

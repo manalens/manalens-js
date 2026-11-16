@@ -1,6 +1,7 @@
 import type { TrackingOptions } from './tracking';
 import type { acquisitionKeys } from './attribution-contract';
 import type { AppInfo } from './app';
+import type { LoggerOptions } from './logger';
 export type Traits = Record<string, string | number | boolean | null>;
 
 /** The browser portion of Formo's event envelope. */
@@ -67,8 +68,16 @@ export interface AnalyticsOptions {
    * setConsent(true). For sites behind a consent banner (e.g. EU visitors).
    */
   requireConsent?: boolean;
+  /**
+   * Send page views automatically, default true: the first page on load, and
+   * each client-side navigation (history.pushState / replaceState when the
+   * path changes, back and forward, and the `ua:navigate` event). Set false
+   * and call page() yourself, for example on a router's page-load event.
+   */
   autoPageviews?: boolean;
+  /** Events per request, default 10. A full queue sends at once. */
   batchSize?: number;
+  /** Send the queue every this many milliseconds, default 5000. */
   flushIntervalMs?: number;
   /**
    * How many times a batch is sent again after a server error (408, 429 or
@@ -79,10 +88,29 @@ export interface AnalyticsOptions {
   retryCount?: number;
   /** Queue limit in bytes (serialized events), default and maximum 500 KB, minimum 200. The oldest events are dropped first. */
   maxQueueSize?: number;
-  /** Hosts, paths and timezones where nothing is sent. See TrackingOptions. */
-  tracking?: TrackingOptions;
+  /**
+   * Hosts, paths and timezones where nothing is sent, and query parameters
+   * never read. See TrackingOptions. A boolean is a simple switch, like
+   * Formo: `false` is the same as `disabled: true`; `true` tracks everywhere
+   * (the default; localhost is tracked too).
+   */
+  tracking?: boolean | TrackingOptions;
   /** Suppress events and all browser storage access when true. */
   disabled?: boolean;
+  /** Console logs, off by default. `{ enabled: true }` prints all levels. */
+  logger?: LoggerOptions;
+  /**
+   * Called once at the end of the constructor with the instance, also when
+   * the SDK is disabled. An error thrown in it is caught and logged.
+   */
+  ready?: (analytics: import('./index').Analytics) => void;
+  /**
+   * Called when events are dropped after a send: the collector refused them
+   * (a 4xx other than 408 and 429), or a server error (408, 429, 5xx) repeated
+   * more than retryCount times. Network errors (offline) do not call it: those
+   * events wait in memory. An error thrown in it is caught.
+   */
+  errorHandler?: (error: Error) => void;
   /**
    * App context for a browser or Electron game, sent as `context.app` on every
    * event next to `context.page` (the channel stays `web`). It feeds the App
