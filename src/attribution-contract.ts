@@ -9,13 +9,16 @@ export function safeCampaign(value: unknown): string | undefined {
   return value;
 }
 /** All network tokens survive; click_id is only a deterministic compatibility winner. */
-export function attributionContext(input: Record<string, unknown>, url?: URL): Record<string, string> {
+export function attributionContext(input: Record<string, unknown>, url?: URL, excludedParams: readonly string[] = []): Record<string, string> {
+  const excluded = new Set(excludedParams.filter(name => typeof name === 'string').map(name => name.trim().toLowerCase()));
+  // A query parameter named in excludedParams (case-insensitive) is never read.
+  const param = (key: string) => (excluded.has(key.toLowerCase()) ? null : url?.searchParams.get(key));
   const fields: Record<string, string> = {};
   for (const key of [...campaignKeys, ...clickNetworks.map(([key]) => key), 'gad_source', 'ref']) {
-    const value = safeCampaign(input[key]) || safeCampaign(url?.searchParams.get(key));
+    const value = safeCampaign(input[key]) || safeCampaign(param(key));
     if (value) fields[key] = value;
   }
-  fields.ref ||= safeCampaign(url?.searchParams.get('referral')) || safeCampaign(url?.searchParams.get('referral_code')) || '';
+  fields.ref ||= safeCampaign(param('referral')) || safeCampaign(param('referral_code')) || '';
   if (!fields.ref) delete fields.ref;
   const click = clickNetworks.find(([key]) => fields[key]);
   const legacySource = safeCampaign(input.paid_source);

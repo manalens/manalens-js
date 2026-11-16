@@ -159,6 +159,8 @@ test('route changes create new pageviews and failed batches retry in memory', as
     assert.equal(sent[0].events[0].message_id, sent[1].events[0].message_id);
     globalThis.location = new URL('https://example.com/docs?token=private');
     window.dispatchEvent(new Event('popstate'));
+    globalThis.document.title = 'Docs'; // the router swaps the page after popstate
+    await new Promise(resolve => setTimeout(resolve, 5));
     await sdk.flush();
     assert.equal(sent[2].events[0].context.page.path, '/docs');
     assert.equal(sent[2].events[0].context.page.url, 'https://example.com/docs');
@@ -264,7 +266,7 @@ for (const [key, network] of [['gclid','google'],['gbraid','google'],['wbraid','
   const {window}=browser(`https://example.com/?${key}=ad-token&utm_source=${network}&utm_campaign=launch`); const sent=[];
   t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
   const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
-  try { globalThis.location=new URL('https://example.com/checkout?email=private');window.dispatchEvent(new Event('popstate'));sdk.track('purchase',{revenue:120});await sdk.identify('customer');await sdk.flush();
+  try { globalThis.location=new URL('https://example.com/checkout?email=private');window.dispatchEvent(new Event('ua:navigate'));sdk.track('purchase',{revenue:120});await sdk.identify('customer');await sdk.flush();
     const events=sent.flatMap(x=>x.events||[]); assert.equal(events.length,4);
     for(const event of events){assert.equal(event.context[key],'ad-token');assert.equal(event.context.click_id,'ad-token');assert.equal(event.context.paid_source,network);assert.equal(event.context.utm_campaign,'launch');assert.ok(!JSON.stringify(event.context).includes('private'));}
     assert.equal(events.find(x=>x.type==='identify')?.context[key],'ad-token');
@@ -274,7 +276,7 @@ test('preserves multiple network IDs and replaces an entire campaign on a new to
   const {window}=browser('https://example.com/?gclid=g&fbclid=f&utm_source=google&utm_term=old&utm_id=c1&utm_source_platform=google');const sent=[];
   t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});
   const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
-  try{globalThis.location=new URL('https://example.com/new?utm_source=newsletter&utm_medium=email');window.dispatchEvent(new Event('popstate'));await sdk.flush();const [first,last]=sent[0].events;assert.equal(first.context.gclid,'g');assert.equal(first.context.fbclid,'f');assert.equal(first.context.click_id,'g');assert.equal(first.context.utm_id,'c1');assert.equal(last.context.utm_source,'newsletter');assert.equal(last.context.gclid,undefined);assert.equal(last.context.utm_term,undefined);assert.equal(last.context.paid_source,undefined);}finally{sdk.destroy();}
+  try{globalThis.location=new URL('https://example.com/new?utm_source=newsletter&utm_medium=email');window.dispatchEvent(new Event('ua:navigate'));await sdk.flush();const [first,last]=sent[0].events;assert.equal(first.context.gclid,'g');assert.equal(first.context.fbclid,'f');assert.equal(first.context.click_id,'g');assert.equal(first.context.utm_id,'c1');assert.equal(last.context.utm_source,'newsletter');assert.equal(last.context.gclid,undefined);assert.equal(last.context.utm_term,undefined);assert.equal(last.context.paid_source,undefined);}finally{sdk.destroy();}
 });
 test('gad_source marks Google traffic but is never a click token; paid UTMs and referral aliases work',async t=>{
   browser('https://example.com/?gad_source=1&referral_code=partner&utm_creative_format=video&utm_marketing_tactic=retargeting');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});let sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});
@@ -285,7 +287,7 @@ test('campaign values reject unsafe and oversized input and arbitrary queries',a
   browser('https://example.com/?gclid=%3Cscript%3E&utm_term='+ 'x'.repeat(256)+'&email=private&token=secret');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{await sdk.flush();const c=sent[0].events[0].context;assert.equal(c.gclid,undefined);assert.equal(c.utm_term,undefined);assert.ok(!JSON.stringify(c).includes('secret'));assert.ok(!JSON.stringify(c).includes('private'));}finally{sdk.destroy();}
 });
 test('UTC midnight drops carried campaign context',async t=>{
-  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-20T23:59:59Z').getTime()});const {window}=browser('https://example.com/?gclid=g&utm_source=google');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{t.mock.timers.tick(2000);globalThis.location=new URL('https://example.com/next');window.dispatchEvent(new Event('popstate'));await sdk.flush();assert.equal(sent[0].events[0].context.gclid,'g');assert.equal(sent[0].events[1].context.gclid,undefined);}finally{sdk.destroy();}
+  t.mock.timers.enable({apis:['Date'],now:new Date('2025-06-20T23:59:59Z').getTime()});const {window}=browser('https://example.com/?gclid=g&utm_source=google');const sent=[];t.mock.method(globalThis,'fetch',async(_url,init)=>{sent.push(JSON.parse(init.body));return {ok:true};});const sdk=new Analytics({publishableKey:'key',endpoint:'https://collector.example',flushIntervalMs:60000});try{t.mock.timers.tick(2000);globalThis.location=new URL('https://example.com/next');window.dispatchEvent(new Event('ua:navigate'));await sdk.flush();assert.equal(sent[0].events[0].context.gclid,'g');assert.equal(sent[0].events[1].context.gclid,undefined);}finally{sdk.destroy();}
 });
 
 
@@ -740,11 +742,11 @@ test('tracking.excludePaths: exact and /* prefix paths, checked per event as a S
   const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*', '/checkout/'] } });
   try {
     sdk.track('admin_click');
-    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
+    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('ua:navigate'));
     sdk.track('pricing_click');
-    globalThis.location = new URL('https://example.com/checkout'); window.dispatchEvent(new Event('popstate'));
+    globalThis.location = new URL('https://example.com/checkout'); window.dispatchEvent(new Event('ua:navigate'));
     sdk.track('checkout_click');
-    globalThis.location = new URL('https://example.com/administrator'); window.dispatchEvent(new Event('popstate'));
+    globalThis.location = new URL('https://example.com/administrator'); window.dispatchEvent(new Event('ua:navigate'));
     await sdk.flush();
     const events = eventsOf(sent).map(event => event.type === 'page' ? `page ${event.context.page.path}` : event.event);
     assert.deepEqual(events, ['page /pricing', 'pricing_click', 'page /administrator']);
@@ -800,7 +802,7 @@ test('tracking rules: an excluded landing page carries no campaign, and a held i
   const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin/*'] } });
   try {
     await sdk.identify('user-9', { plan: 'pro' });
-    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('popstate'));
+    globalThis.location = new URL('https://example.com/pricing'); window.dispatchEvent(new Event('ua:navigate'));
     await sdk.flush();
     const events = eventsOf(sent);
     assert.deepEqual(events.map(event => event.type), ['identify', 'page']);
@@ -817,7 +819,7 @@ test('consent on an excluded page holds the identify until an allowed page', asy
     await sdk.identify('user-7', { plan: 'team' });
     sdk.setConsent(true);
     assert.equal(jar.find('ua_').some(cookie => cookie.name.endsWith('_user-id')), false, 'no user cookie on the excluded page');
-    globalThis.location = new URL('https://example.com/home'); window.dispatchEvent(new Event('popstate'));
+    globalThis.location = new URL('https://example.com/home'); window.dispatchEvent(new Event('ua:navigate'));
     await sdk.flush();
     const events = eventsOf(sent);
     assert.equal(events[0].type, 'identify'); assert.equal(events[0].user_id, 'user-7');
@@ -1023,4 +1025,206 @@ test('snippet: data-publishable-key works, and the old data-write-key still work
     assert.equal(sent[0]['x-publishable-key'], dataset.publishableKey || dataset.writeKey);
     window.untitledAnalytics.destroy();
   }
+});
+
+/** Mock timers run one level of timers per tick(): step 10 ms at a time, so timers set by timers run too. */
+const advance = (t, ms) => { for (let step = 0; step < ms; step += 10) t.mock.timers.tick(Math.min(10, ms - step)); if (ms === 0) t.mock.timers.tick(0); };
+const pagesOf = sent => eventsOf(sent).filter(event => event.type === 'page').map(event => [event.context.page.path, event.context.page.title]);
+
+test('back and forward: the page view waits for the framework to change the title, and is sent once', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { window, document } = browser('https://example.com/a');
+  document.title = 'A';
+  const history = fakeHistory(); globalThis.history = history;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    history.pushState(null, '', '/b'); document.title = 'B';
+    advance(t, 0);
+    // Back: the URL is /a at once, but the framework loads and swaps the page later.
+    globalThis.location = new URL('https://example.com/a');
+    window.dispatchEvent(new Event('popstate'));
+    advance(t, 100);
+    history.replaceState(null, '', '/a'); // a router saves the scroll position: no early page view
+    advance(t, 100);
+    await sdk.flush();
+    assert.deepEqual(pagesOf(sent), [['/a', 'A'], ['/b', 'B']], 'nothing yet: the title is still the page you left');
+    document.title = 'A'; // the swap, 200 ms after popstate
+    advance(t, 50);
+    sdk.page(); // for example page() on astro:page-load: same path and query, no second page view
+    advance(t, 2000);
+    await sdk.flush();
+    assert.deepEqual(pagesOf(sent), [['/a', 'A'], ['/b', 'B'], ['/a', 'A']]);
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('back and forward: without a title change the page view is sent after 1 s; a hash-only change sends nothing', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { window } = browser('https://example.com/a');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    globalThis.location = new URL('https://example.com/b');
+    window.dispatchEvent(new Event('popstate'));
+    advance(t, 950);
+    await sdk.flush();
+    assert.deepEqual(pagesOf(sent).map(([path]) => path), ['/a']);
+    advance(t, 100);
+    await sdk.flush();
+    assert.deepEqual(pagesOf(sent).map(([path]) => path), ['/a', '/b']);
+    globalThis.location = new URL('https://example.com/b#section');
+    window.dispatchEvent(new Event('popstate'));
+    advance(t, 2000);
+    await sdk.flush();
+    assert.deepEqual(pagesOf(sent).map(([path]) => path), ['/a', '/b']);
+  } finally { sdk.destroy(); }
+});
+
+test('back and forward: a page view that waits is sent with the pagehide flush, not lost', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { window } = browser('https://example.com/a');
+  const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return { ok: true }; });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    await sdk.flush();
+    globalThis.location = new URL('https://example.com/b');
+    window.dispatchEvent(new Event('popstate'));
+    window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent[1].init.keepalive, true);
+    assert.deepEqual(sent[1].body.events.map(event => event.context.page.path), ['/b']);
+    advance(t, 2000);
+    await sdk.flush();
+    assert.equal(sent.length, 2, 'the timer sends no second page view');
+  } finally { sdk.destroy(); }
+});
+
+test('first load: the page view is queued at once with the current title (no wait)', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  browser('https://example.com/pricing');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try { await sdk.flush(); assert.deepEqual(pagesOf(sent), [['/pricing', 'Pricing']]); } finally { sdk.destroy(); }
+});
+
+const runSnippet = async (dataset, extra = {}) => {
+  const { window, document } = browser('https://example.com/');
+  document.currentScript = { dataset: { publishableKey: 'ua_pk_snippet', endpoint: 'https://collector.example', ...dataset } };
+  const sent = [];
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, CustomEvent, console, setInterval: () => 1, clearInterval: () => {}, setTimeout, clearTimeout, history: globalThis.history, fetch: async (_url, init) => { sent.push({ body: JSON.parse(init.body) }); return { ok: true }; }, ...extra });
+  return { window, sent };
+};
+
+test('snippet data-auto-pageviews="false" sends no page view and does not wrap history; page() still works', async () => {
+  const history = fakeHistory(); const original = history.pushState; globalThis.history = history;
+  try {
+    const { window, sent } = await runSnippet({ autoPageviews: 'false' });
+    assert.equal(history.pushState, original);
+    window.untitledAnalytics.track('clicked'); await window.untitledAnalytics.flush();
+    assert.deepEqual(eventsOf(sent).map(event => event.type), ['track']);
+    window.untitledAnalytics.page(); await window.untitledAnalytics.flush();
+    assert.deepEqual(eventsOf(sent).map(event => event.type), ['track', 'page']);
+    window.untitledAnalytics.destroy();
+    const auto = await runSnippet({ autoPageviews: 'true' });
+    await auto.window.untitledAnalytics.flush();
+    assert.deepEqual(eventsOf(auto.sent).map(event => event.type), ['page']);
+    auto.window.untitledAnalytics.destroy();
+  } finally { delete globalThis.history; }
+});
+
+test('snippet: untitled-analytics:ready fires on window with the instance; data-debug="true" logs', async t => {
+  const lines = [];
+  const fakeConsole = { debug: m => lines.push(m), info: m => lines.push(m), warn: m => lines.push(m), error: m => lines.push(m) };
+  t.mock.method(console, 'info', m => lines.push(m)); t.mock.method(console, 'debug', m => lines.push(m));
+  let detail;
+  const { window, document } = browser('https://example.com/');
+  window.addEventListener('untitled-analytics:ready', event => { detail = event.detail; });
+  document.currentScript = { dataset: { publishableKey: 'ua_pk_snippet', endpoint: 'https://collector.example', debug: 'true' } };
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, CustomEvent, console: fakeConsole, setInterval: () => 1, clearInterval: () => {}, fetch: async () => ({ ok: true }) });
+  assert.equal(detail, window.untitledAnalytics);
+  assert.ok(lines.some(line => line.includes('Initialized')), lines.join('\n'));
+  assert.ok(lines.some(line => line.includes('Queued page')));
+  window.untitledAnalytics.destroy();
+});
+
+test('tracking: false is the same as disabled: true; tracking: true tracks', async t => {
+  const { jar } = browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const off = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', tracking: false });
+  off.track('x'); await off.flush(); off.destroy();
+  assert.equal(sent.length, 0); assert.equal(jar.writes.length, 0);
+  const on = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', tracking: true, flushIntervalMs: 60000 });
+  try { await on.flush(); assert.deepEqual(eventsOf(sent).map(event => event.type), ['page']); } finally { on.destroy(); }
+});
+
+test('localhost is tracked by default', async t => {
+  browser('http://localhost:4321/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try { await sdk.flush(); assert.equal(eventsOf(sent).length, 1); } finally { sdk.destroy(); }
+});
+
+test('tracking.excludeQueryParams: named campaign parameters are never read (case-insensitive)', async t => {
+  browser('https://example.com/?ref=friend42&utm_source=news&gclid=g1&referral=r2');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludeQueryParams: ['REF', 'gclid', 'referral'] } });
+  try {
+    sdk.track('x'); await sdk.flush();
+    for (const event of eventsOf(sent)) {
+      assert.equal(event.context.utm_source, 'news');
+      for (const key of ['ref', 'gclid', 'click_id', 'paid_source']) assert.equal(event.context[key], undefined, key);
+      assert.equal(JSON.stringify(event).includes('friend42'), false);
+      assert.equal(JSON.stringify(event).includes('r2'), false);
+    }
+  } finally { sdk.destroy(); }
+});
+
+test('logger: off by default; levels match exactly; no property values or user IDs in logs', async t => {
+  browser('https://example.com/');
+  const lines = [];
+  for (const method of ['debug', 'info', 'warn', 'error']) t.mock.method(console, method, message => lines.push([method, message]));
+  t.mock.method(globalThis, 'fetch', async () => response(500));
+  const quiet = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  quiet.track('a'); await quiet.flush(); quiet.destroy();
+  assert.deepEqual(lines, []);
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, logger: { enabled: true, levels: ['warn'] } });
+  try {
+    sdk.track('secret_event', { email: 'person@example.com' }); await sdk.identify('user_private', { plan: 'pro' });
+    assert.ok(lines.length > 0);
+    assert.ok(lines.every(([method]) => method === 'warn'));
+    assert.equal(JSON.stringify(lines).includes('person@example.com'), false);
+    assert.equal(JSON.stringify(lines).includes('user_private'), false);
+  } finally { sdk.destroy(); }
+});
+
+test('ready: called once with the instance, also when disabled; an error in it is caught', t => {
+  browser('https://example.com/');
+  t.mock.method(globalThis, 'fetch', collector([]));
+  t.mock.method(console, 'error', () => {});
+  const calls = [];
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', ready: instance => calls.push(instance) });
+  assert.deepEqual(calls, [sdk]); sdk.destroy();
+  const off = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', disabled: true, ready: instance => calls.push(instance) });
+  assert.equal(calls[1], off);
+  assert.doesNotThrow(() => new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', disabled: true, ready: () => { throw new Error('bad'); } }));
+  assert.equal(console.error.mock.callCount(), 1);
+});
+
+test('errorHandler: called when events are refused or dropped after retries, not for network errors', async t => {
+  browser('https://example.com/');
+  const errors = [];
+  let mode = 'offline';
+  t.mock.method(globalThis, 'fetch', async () => { if (mode === 'offline') throw new Error('offline'); return response(mode); });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 1, errorHandler: error => errors.push(error) });
+  try {
+    sdk.track('a'); await sdk.flush();
+    assert.equal(errors.length, 0, 'offline: the events wait');
+    mode = 503; await sdk.flush(); assert.equal(errors.length, 0, 'first server error: retried');
+    await sdk.flush();
+    assert.equal(errors.length, 1); assert.equal(errors[0].name, 'SendError'); assert.equal(errors[0].status, 503); assert.equal(errors[0].dropped, 1);
+    mode = 400; sdk.track('b'); await sdk.flush();
+    assert.equal(errors.length, 2); assert.equal(errors[1].status, 400);
+  } finally { sdk.destroy(); }
 });
