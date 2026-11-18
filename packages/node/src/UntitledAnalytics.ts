@@ -8,6 +8,8 @@ import type { AnalyticsOptions, AppContext, AppInfo, IdentifyCall, Logger, Mode,
 export const SDK_VERSION = '0.1.0';
 export const LIBRARY_NAME = '@untitled-analytics/node';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
+/** A session is never older than this: the collector's session rule does not use a client session of more than 24 hours. */
+const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
 /** Collector batch limits on `POST /v0/events`. */
 const MAX_BATCH: Record<Mode, number> = { server: 100, app: 50 };
 
@@ -62,6 +64,7 @@ export class UntitledAnalytics {
   private anonymousId?: string;
   private sessionId?: string;
   private lastEventAt = 0;
+  private sessionStartedAt = 0;
   private fixedSession: boolean;
   private closed = false;
 
@@ -121,14 +124,16 @@ export class UntitledAnalytics {
   }
 
   /**
-   * App mode: the current session ID. Before the first event, or after 30
-   * minutes without events, this starts a new session, so the value always
-   * matches the session_id of the next event. Server mode: undefined.
+   * App mode: the current session ID. Before the first event, after 30
+   * minutes without events, or when the session is 24 hours old, this starts
+   * a new session, so the value always matches the session_id of the next
+   * event. Send it with the server events of the same player (`sessionId` on
+   * a server mode call). Server mode: undefined.
    */
   getSessionId(): string | undefined {
     if (this.mode !== 'app') return this.sessionId;
     const now = Date.now();
-    if (!this.fixedSession && (!this.sessionId || now - this.lastEventAt > SESSION_TIMEOUT_MS)) { this.sessionId = randomUUID(); this.lastEventAt = now; }
+    if (this.sessionEnded(now)) { this.startSession(now); this.lastEventAt = now; }
     return this.sessionId;
   }
 
@@ -218,10 +223,24 @@ export class UntitledAnalytics {
     });
   }
 
-  /** App mode session: a new UUID after 30 minutes without events, unless the sessionId option fixed it. */
+  /**
+   * App mode session: a new UUID after 30 minutes without events or 24 hours
+   * after the session started, unless the sessionId option fixed it.
+   */
   private session(now: number): string {
-    if (!this.fixedSession && (!this.sessionId || now - this.lastEventAt > SESSION_TIMEOUT_MS)) this.sessionId = randomUUID();
+    if (this.sessionEnded(now)) this.startSession(now);
     this.lastEventAt = now;
     return this.sessionId!;
+  }
+
+  private sessionEnded(now: number): boolean {
+    if (this.fixedSession) return false;
+    return !this.sessionId || now - this.lastEventAt > SESSION_TIMEOUT_MS || now - this.sessionStartedAt >= SESSION_MAX_AGE_MS;
+  }
+
+  private startSession(now: number): void {
+    if (this.sessionId) this.log('session rotated (30 minutes without events, or 24 hours old)');
+    this.sessionId = randomUUID();
+    this.sessionStartedAt = now;
   }
 }

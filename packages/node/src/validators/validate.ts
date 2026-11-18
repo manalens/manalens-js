@@ -155,6 +155,9 @@ export function validateAppEvent(event: WireEvent, now = Date.now()): void {
   checkCommon(event, 'app', now);
   if (event.channel !== 'app') fail('channel', 'must be app');
   if (event.anonymous_id === undefined) fail('anonymousId', 'is required in app mode');
+  // The collector refuses these two (SESSION_ID_REQUIRED, SESSION_ID_IS_ANONYMOUS_ID): drop them here with a clear message.
+  if (event.session_id === undefined) fail('sessionId', 'is required in app mode');
+  if (event.session_id === event.anonymous_id) fail('sessionId', 'must not be the anonymousId');
   checkString('version', event.version, 32);
   const context = event.context;
   if (!isObject(context)) fail('context', 'must be an object');
