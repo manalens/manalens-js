@@ -34,6 +34,6 @@ export function pageContext(pageUrl = location.href, excludedParams: readonly st
  * events. It accepts -720 to 840; any other value is left out.
  */
 export function utcOffset(now: Date = new Date()): { utc_offset?: number } {
-  const minutes = -now.getTimezoneOffset();
+  const minutes = 0 - now.getTimezoneOffset();
   return Number.isInteger(minutes) && minutes >= -720 && minutes <= 840 ? { utc_offset: minutes } : {};
 }
