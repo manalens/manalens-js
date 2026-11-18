@@ -5,6 +5,11 @@ import { getCookie, identityCookieDomain, readLocal, removeCookie, removeLocal, 
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
 /** A session ends after 30 minutes without an event. */
 export const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
+/**
+ * A session is never older than this, also with continuous activity. The
+ * collector's session rule does not use a client session of more than 24 hours.
+ */
+export const SESSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 
 /** Page-lifetime fallback when cookies and localStorage are both unavailable. */
@@ -50,19 +55,43 @@ export function clearAnonymousId(key: string): void {
 }
 
 /**
- * Read the current session ID or start a new one, then record activity.
- * Stored as `<uuid>.<last activity ms>` with a rolling 30-minute cookie and the
- * same localStorage / memory fallbacks as the anonymous ID.
+ * The stored session when it is still current: at most 30 minutes since the
+ * last activity and less than 24 hours since its start. A value in the format
+ * of SDK 0.4.0 and older (`<uuid>.<last activity ms>`, no start time) is not
+ * current, so the first event after an SDK update starts a new session.
+ */
+function storedSession(key: string, now: number): { id: string; startedAt: number } | undefined {
+  for (const raw of [getCookie(key), readLocal(key), volatile.get(key)]) {
+    const [id, at, start] = raw?.split('.') ?? [];
+    const last = Number(at);
+    const startedAt = Number(start);
+    const active = Number.isFinite(last) && last > now - SESSION_TIMEOUT_MS && last <= now + 60_000;
+    const young = start !== undefined && start !== '' && Number.isFinite(startedAt) && startedAt > now - SESSION_MAX_AGE_MS && startedAt <= now + 60_000;
+    if (id && validId(id) && active && young) return { id, startedAt };
+  }
+  return undefined;
+}
+
+/**
+ * Read the current session ID or start a new one, then record activity. A new
+ * session starts after 30 minutes without an event, and when the session is
+ * 24 hours old. Stored as `<uuid>.<last activity ms>.<start ms>` with a
+ * rolling 30-minute cookie and the same localStorage / memory fallbacks as
+ * the anonymous ID.
  */
 export function touchSessionId(key: string, crossSubdomain: boolean, now = Date.now()): string {
-  const parse = (raw: string | undefined) => {
-    const [id, at] = raw?.split('.') ?? [];
-    const last = Number(at);
-    return validId(id) && Number.isFinite(last) && last > now - SESSION_TIMEOUT_MS && last <= now + 60_000 ? id : undefined;
-  };
-  const id = parse(getCookie(key)) ?? parse(readLocal(key)) ?? parse(volatile.get(key)) ?? crypto.randomUUID();
-  persist(key, `${id}.${now}`, SESSION_TIMEOUT_MS / 1000, crossSubdomain);
-  return id;
+  const session = storedSession(key, now) ?? { id: crypto.randomUUID(), startedAt: now };
+  persist(key, `${session.id}.${now}.${session.startedAt}`, SESSION_TIMEOUT_MS / 1000, crossSubdomain);
+  return session.id;
+}
+
+/**
+ * The session ID that the next event will have. It does not count as
+ * activity: a current session is returned as stored; only when there is none
+ * does this start one.
+ */
+export function currentSessionId(key: string, crossSubdomain: boolean, now = Date.now()): string {
+  return storedSession(key, now)?.id ?? touchSessionId(key, crossSubdomain, now);
 }
 
 export const clearSessionId = clearAnonymousId;

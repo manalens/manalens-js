@@ -65,7 +65,7 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | Key suffix | Where | Lifetime | Purpose |
 | --- | --- | --- | --- |
 | `anonymous-id` | cookie, else localStorage, else memory | 1 year, refreshed on each event | Persistent browser ID |
-| `session-id` | cookie, else localStorage, else memory | 30 minutes of inactivity | `session_id` on each event |
+| `session-id` | cookie, else localStorage, else memory | 30 minutes of inactivity, and at most 24 hours from the start of the session | `session_id` on each event |
 | `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
 
@@ -124,11 +124,14 @@ A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
 
 ### Delivery errors
 
-`errorHandler` gets a `SendError` (`name`, `message`, `status`, `dropped`)
-when events are dropped:
+`errorHandler` gets a `SendError` (`name`, `message`, `status`, `dropped`,
+`reasons`) when events are dropped:
 
 - The collector refused the batch (a 4xx other than 408 and 429, for example
-  `401` for a wrong key or `403` for a page off the project domain).
+  `401` for a wrong key or `403` for a page off the project domain). A refused
+  batch is dropped and is not sent again. `reasons` has the reason codes of
+  the collector, and `message` (also in the error log) has its text, for
+  example `HTTP 400 INVALID_EVENT, SESSION_ID_REQUIRED: ...`.
 - A server error (408, 429, 5xx) repeated more than `retryCount` times.
 
 Network errors (offline) do not call it: those events wait in memory and go
@@ -225,7 +228,32 @@ createAnalytics({
 
 `page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
 `reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
-`getAnonymousId()`, `flush(keepalive?)`, `destroy()`.
+`getAnonymousId()`, `getSessionId()`, `flush(keepalive?)`, `destroy()`.
+
+### Sessions
+
+Each event with an identity has a `session_id`: a UUID that is never the
+`anonymous_id`. A new session starts after 30 minutes without an event, and
+when the session is 24 hours old (a page that stays active for more than a day
+gets a new session each 24 hours). The collector refuses an event that has an
+`anonymous_id` and no `session_id`, and a `session_id` that is equal to the
+`anonymous_id`.
+
+`getSessionId()` returns the session ID of the next event, or `undefined` when
+the SDK sends no identity (before consent, after `optOut()`, on an excluded
+page). A read does not count as activity. Send it to your backend with the
+`anonymous_id`, and put both on the server events of that visitor (for example
+a purchase), so that the server event is in the visitor's session:
+
+```ts
+await fetch('/api/checkout', {
+  method: 'POST',
+  body: JSON.stringify({ cart, anonymousId: analytics.getAnonymousId(), sessionId: analytics.getSessionId() }),
+});
+```
+
+A session that SDK 0.4.0 or older stored (it has no start time) is not
+continued: the first event after the update starts a new session.
 
 ### Event envelope
 

@@ -621,6 +621,104 @@ test('autoPageviews: false does not wrap history', async t => {
   try { assert.equal(history.pushState, original); } finally { sdk.destroy(); delete globalThis.history; }
 });
 
+test('a session is at most 24 hours old: continuous activity starts a new session at 24 hours', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  browser('https://example.com/');
+  const sdk = make({ publishableKey: 'ua_session_age' });
+  try {
+    const first = await firstEvent(sdk, sent);
+    // An event every 20 minutes: 23 hours and 40 minutes in one session.
+    let last = first;
+    for (let minutes = 20; minutes < 24 * 60; minutes += 20) { t.mock.timers.tick(20 * 60000); last = await firstEvent(sdk, sent); }
+    assert.equal(last.session_id, first.session_id);
+    t.mock.timers.tick(20 * 60000);
+    const next = await firstEvent(sdk, sent);
+    assert.notEqual(next.session_id, first.session_id, 'a new session when the session is 24 hours old');
+    assert.match(next.session_id, uuid);
+    assert.equal(next.anonymous_id, first.anonymous_id);
+    for (const event of eventsOf(sent)) assert.notEqual(event.session_id, event.anonymous_id, 'the session ID is never the anonymous ID');
+  } finally { sdk.destroy(); }
+});
+
+test('a session stored by SDK 0.4.0 (no start time) is not continued: the first event starts a new session', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const { jar } = browser('https://example.com/');
+  let sdk = make({ publishableKey: 'ua_session_old' });
+  try {
+    const before = await firstEvent(sdk, sent);
+    const cookie = jar.find('ua_').find(c => c.name.endsWith('_session-id'));
+    assert.match(cookie.value, /^[a-f0-9-]{36}\.\d+\.\d+$/, 'stored as <uuid>.<last activity>.<start>');
+    sdk.destroy();
+    // The old format, one minute old: valid for 0.4.0, and without a start time.
+    const old = '11111111-1111-4111-8111-111111111111';
+    document.cookie = `${cookie.name}=${old}.${Date.now() - 60000}; max-age=1800; path=/`;
+    for (const broken of [`${old}.${Date.now() - 60000}`, `${old}.${Date.now()}.`, `${old}.${Date.now()}.abc`, `${old}.x.${Date.now()}`]) {
+      document.cookie = `${cookie.name}=${broken}; max-age=1800; path=/`;
+      sdk = make({ publishableKey: 'ua_session_old' });
+      const event = await firstEvent(sdk, sent);
+      assert.match(event.session_id, uuid, broken);
+      assert.notEqual(event.session_id, old, `${broken} was continued`);
+      assert.equal(event.anonymous_id, before.anonymous_id);
+      sdk.destroy();
+    }
+    sdk = make({ publishableKey: 'ua_session_old' });
+  } finally { sdk.destroy(); }
+});
+
+test('getSessionId: the session ID of the next event; reading it is not activity; undefined before consent', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  browser('https://example.com/');
+  const sdk = make({ publishableKey: 'ua_session_getter' });
+  try {
+    const before = sdk.getSessionId();
+    assert.match(before, uuid, 'a session starts when there is none');
+    const first = await firstEvent(sdk, sent);
+    assert.equal(first.session_id, before);
+    assert.notEqual(before, sdk.getAnonymousId());
+    // 20 minutes later a read does not keep the session alive: 31 minutes after the event it has ended.
+    t.mock.timers.tick(20 * 60000); assert.equal(sdk.getSessionId(), before);
+    t.mock.timers.tick(11 * 60000);
+    const after = sdk.getSessionId();
+    assert.notEqual(after, before, 'a read is not activity');
+    assert.equal((await firstEvent(sdk, sent)).session_id, after);
+  } finally { sdk.destroy(); }
+  browser('https://consent-getter.com/');
+  const consent = make({ publishableKey: 'ua_session_getter_consent', requireConsent: true });
+  try {
+    assert.equal(consent.getSessionId(), undefined, 'no session ID before consent');
+    consent.setConsent(true);
+    assert.match(consent.getSessionId(), uuid);
+    consent.optOut();
+    assert.equal(consent.getSessionId(), undefined, 'no session ID after optOut()');
+  } finally { consent.destroy(); }
+});
+
+test('a refusal with a reason: the error log and the errorHandler name the reason codes, and the batch is not sent again', async t => {
+  browser('https://example.com/');
+  const body = { error: { code: 'INVALID_EVENT', message: '1 of 2 events break the session ID contract. No event of the batch was accepted', refused: [{ index: 1, message_id: 'x', code: 'SESSION_ID_REQUIRED', message: 'An event with an anonymous_id needs a session_id' }] } };
+  const sent = []; const errors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return sent.length === 1 ? { ok: false, status: 400, headers: { get: () => null }, text: async () => JSON.stringify(body) } : { ok: true, status: 202 };
+  });
+  const logged = []; t.mock.method(console, 'error', (...args) => { logged.push(args.join(' ')); });
+  const sdk = new Analytics({ publishableKey: 'key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, logger: { enabled: true, levels: ['error'] }, errorHandler: error => errors.push(error) });
+  try {
+    sdk.track('one'); sdk.track('two'); await sdk.flush(); await sdk.flush();
+    assert.equal(sent.length, 1, 'the refused batch is not sent again');
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].status, 400); assert.equal(errors[0].dropped, 2);
+    assert.deepEqual(errors[0].reasons, ['INVALID_EVENT', 'SESSION_ID_REQUIRED']);
+    assert.match(errors[0].message, /The collector refused 2 event\(s\): HTTP 400 INVALID_EVENT, SESSION_ID_REQUIRED: 1 of 2 events break the session ID contract.*The events are dropped/);
+    assert.ok(logged.some(line => line.includes('SESSION_ID_REQUIRED')), logged.join('\n'));
+    sdk.track('next'); await sdk.flush();
+    assert.deepEqual(sent[1].events.map(event => event.event), ['next']);
+  } finally { sdk.destroy(); }
+});
+
 const response = (status, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: name => headers[name.toLowerCase()] ?? null } });
 
 test('retry: a refused batch (400, 401, 403) is dropped, not sent again', async t => {
