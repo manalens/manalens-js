@@ -92,6 +92,8 @@ test('ESM SDK sends page and custom events with first-party identity to a local 
     assert.equal(events[0].context.referrer, 'https://google.com');
     assert.equal(events[0].context.utm_source, 'Newsletter');
     assert.equal(events[0].context.library_name, 'Untitled Analytics Web SDK');
+    // The clock's UTC offset in minutes, for install matching (P-2489).
+    assert.equal(events[0].context.utc_offset, -new Date().getTimezoneOffset());
     assert.equal(events[0].context.library_version, events[0].version);
     assert.deepEqual(events[1].properties, { plan: 'starter' });
     assert.match(events[0].anonymous_id, uuid);
