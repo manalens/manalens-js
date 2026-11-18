@@ -24,5 +24,16 @@ export function pageContext(pageUrl = location.href, excludedParams: readonly st
     referrer,
     ...campaign,
     locale: navigator.language?.slice(0, 32),
+    ...utcOffset(),
   };
+}
+
+/**
+ * The clock's offset from UTC in minutes (480 for UTC+8). The collector uses
+ * it only to match a game install to a website visit and does not store it on
+ * events. It accepts -720 to 840; any other value is left out.
+ */
+export function utcOffset(now: Date = new Date()): { utc_offset?: number } {
+  const minutes = -now.getTimezoneOffset();
+  return Number.isInteger(minutes) && minutes >= -720 && minutes <= 840 ? { utc_offset: minutes } : {};
 }

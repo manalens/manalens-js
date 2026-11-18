@@ -444,6 +444,12 @@ The collector classifies each event into an acquisition `channel_type` (for exam
 Organic Video or Paid Video for YouTube). Every event also carries
 `context.library_name` and `context.library_version`.
 
+Every event also carries `context.utc_offset`: the clock's offset from UTC in
+minutes (480 for UTC+8). The collector uses it only to match a game install to
+a website visit (install attribution) and does not store it on events. The
+collector must be a version that accepts this field; an older collector
+refuses the event.
+
 A coherent campaign is carried **in memory** across SPA routes and subsequent
 track/identify calls, replaced when a new tagged acquisition arrives, and
 cleared at UTC midnight. Reloading or creating another instance clears it; the

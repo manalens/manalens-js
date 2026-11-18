@@ -24,6 +24,8 @@ export interface AnalyticsEvent {
     paid_source?: string;
     click_id?: string;
     locale?: string;
+    /** The clock's offset from UTC in minutes. For install matching only; not stored on events. */
+    utc_offset?: number;
     /** Formo-style SDK identification. */
     library_name?: string;
     library_version?: string;
