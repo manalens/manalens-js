@@ -1,6 +1,6 @@
 import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
-import { clearAnonymousId, clearSessionId, clearUserId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
+import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
 import { storageKey } from './storage';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
 import { Logger } from './logger';
@@ -53,12 +53,32 @@ const MAX_RETRY_AFTER_MS = 60_000;
 const POPSTATE_POLL_MS = 50;
 const POPSTATE_MAX_WAIT_MS = 1000;
 
-/** A failed send whose events were dropped; given to the errorHandler option. */
+/**
+ * A failed send whose events were dropped; given to the errorHandler option.
+ * `reasons` has the reason codes of the collector when it refused the batch,
+ * for example `['INVALID_EVENT', 'SESSION_ID_REQUIRED']`.
+ */
 export class SendError extends Error {
-  constructor(message: string, readonly status: number, readonly dropped: number) {
+  constructor(message: string, readonly status: number, readonly dropped: number, readonly reasons: string[] = []) {
     super(message);
     this.name = 'SendError';
   }
+}
+
+/**
+ * Why the collector refused a batch, from its JSON response:
+ * `{ error: { code, message, refused?: [{ index, message_id, code, message }] } }`.
+ * Never throws: a response without a JSON body gives no reason.
+ */
+async function refusalReason(response: { text?: () => Promise<string> }): Promise<{ text: string; codes: string[] }> {
+  try {
+    const error = (JSON.parse((await response.text?.()) ?? '') as { error?: { code?: unknown; message?: unknown; refused?: unknown } })?.error;
+    if (!error || typeof error !== 'object') return { text: '', codes: [] };
+    const refused = Array.isArray(error.refused) ? error.refused as { code?: unknown }[] : [];
+    const codes = [...new Set([error.code, ...refused.map(item => item?.code)].filter((code): code is string => typeof code === 'string' && code.length > 0))];
+    const message = typeof error.message === 'string' ? error.message.slice(0, 300) : '';
+    return { text: [codes.join(', '), message].filter(Boolean).join(': '), codes };
+  } catch { return { text: '', codes: [] }; }
 }
 
 const clamp = (value: number | undefined, min: number, max: number, fallback: number) =>
@@ -339,6 +359,15 @@ export class Analytics {
   getAnonymousId(): string | undefined {
     return this.active() && this.identityAllowed() && !this.pageExcluded() ? generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) : undefined;
   }
+  /**
+   * The session ID of the next event, or undefined when the SDK sends no
+   * identity (before consent, after optOut(), on an excluded page). Send it
+   * with the server events of the same visitor, so that they are in this
+   * session. Reading it does not count as activity.
+   */
+  getSessionId(): string | undefined {
+    return this.active() && this.identityAllowed() && !this.pageExcluded() ? currentSessionId(this.keys.sessionId, this.options.crossSubdomainCookies) : undefined;
+  }
 
   /**
    * Send the game handoff once: a `track` event `identity_handoff` with the
@@ -482,7 +511,11 @@ export class Analytics {
         if (response.ok) {
           this.backoffStep = 0; this.retryAt = 0;
           this.logger.log('debug', `Sent ${batch.length} event(s)`);
-        } else this.reportDropped(`The collector refused ${batch.length} event(s): HTTP ${response.status}`, response.status, batch.length);
+        } else {
+          // Dropped, not sent again. The reason of the collector goes to the log and to the errorHandler.
+          const reason = await refusalReason(response);
+          this.reportDropped(`The collector refused ${batch.length} event(s): HTTP ${response.status}${reason.text ? ` ${reason.text}` : ''}. The events are dropped`, response.status, batch.length, reason.codes);
+        }
         return;
       }
       retry = batch.filter(event => {
@@ -511,11 +544,11 @@ export class Analytics {
   }
 
   /** Log the drop and call the errorHandler option (an error thrown there is caught). */
-  private reportDropped(message: string, status: number, dropped: number): void {
+  private reportDropped(message: string, status: number, dropped: number, reasons: string[] = []): void {
     this.logger.log('error', message);
     const handler = this.options.errorHandler;
     if (typeof handler !== 'function') return;
-    try { handler(new SendError(message, status, dropped)); } catch (error) { console.error('[Untitled Analytics] Error in the errorHandler callback:', error); }
+    try { handler(new SendError(message, status, dropped, reasons)); } catch (error) { console.error('[Untitled Analytics] Error in the errorHandler callback:', error); }
   }
 
   destroy(): void {
