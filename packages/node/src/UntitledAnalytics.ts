@@ -36,7 +36,7 @@ export function checkKey(key: unknown, mode: Mode): asserts key is string {
 }
 
 /**
- * ManaLens for Node.js.
+ * Manalens for Node.js.
  *
  * - `server` mode (default): a backend or a dedicated game server sends
  *   `channel: 'server'` events with the secret key (`ua_sk_`).

@@ -1,6 +1,6 @@
 # @untitled-analytics/node
 
-ManaLens for Node.js. It sends `track` and `identify` events to `POST /v0/events` with batching, a flush timer and retries (exponential backoff with jitter, `Retry-After`). No dependencies. Node.js 20.3 or newer.
+Manalens for Node.js. It sends `track` and `identify` events to `POST /v0/events` with batching, a flush timer and retries (exponential backoff with jitter, `Retry-After`). No dependencies. Node.js 20.3 or newer.
 
 Ported from `@formo/analytics-node` without the wallet code.
 

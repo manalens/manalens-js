@@ -1,7 +1,7 @@
 {
   "name": "@untitled-analytics/node",
   "version": "0.1.0",
-  "description": "ManaLens for Node.js: server events and Electron main-process app events.",
+  "description": "Manalens for Node.js: server events and Electron main-process app events.",
   "license": "MIT",
   "private": true,
   "type": "module",
