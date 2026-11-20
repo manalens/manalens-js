@@ -8,8 +8,8 @@ export interface CookieOptions {
   domain?: string;
 }
 
-const PREFIX = 'ua';
-const PROBE = '__ua_domain_probe';
+const PREFIX = 'mana';
+const PROBE = '__mana_domain_probe';
 const EXPIRED = 'Thu, 01 Jan 1970 00:00:00 GMT';
 
 /** Short, stable FNV-1a hash so cookie names never contain the raw publishable key. */
@@ -22,7 +22,7 @@ function hashKey(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-/** Project-scoped storage key, e.g. `ua_1a2b3c4d_anonymous-id`. */
+/** Project-scoped storage key, e.g. `mana_1a2b3c4d_anonymous-id`. */
 export function storageKey(publishableKey: string, name: string): string {
   return `${PREFIX}_${hashKey(publishableKey)}_${name}`;
 }

@@ -45,18 +45,12 @@ export interface AnalyticsEvent {
 
 export interface AnalyticsOptions {
   /**
-   * The project publishable key (`ua_pk_...`, or `ua_...` on older projects).
-   * It is public and safe in a page or a game build. The server resolves it to
-   * the project. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`)
-   * is refused: never put those in browser code. Required (or the deprecated
-   * `writeKey`).
+   * The project publishable key (`mana_pk_...`). It is public and safe in a
+   * page or a game build. The server resolves it to the project. Any other
+   * value, such as a secret key (`mana_sk_`) or an API key (`mana_api_`), is
+   * refused: never put those in browser code. Required.
    */
-  publishableKey?: string;
-  /**
-   * @deprecated The old name of `publishableKey`; still accepted. Giving both
-   * with different values throws an error.
-   */
-  writeKey?: string;
+  publishableKey: string;
   endpoint: string;
   /**
    * Scope identity cookies to the apex domain (`.example.com`) so subdomains
@@ -73,7 +67,7 @@ export interface AnalyticsOptions {
   /**
    * Send page views automatically, default true: the first page on load, and
    * each client-side navigation (history.pushState / replaceState when the
-   * path changes, back and forward, and the `ua:navigate` event). Set false
+   * path changes, back and forward, and the `manalens:navigate` event). Set false
    * and call page() yourself, for example on a router's page-load event.
    */
   autoPageviews?: boolean;
