@@ -1,5 +1,5 @@
 /**
- * Validators for the Untitled Analytics Node SDK.
+ * Validators for the ManaLens Node SDK.
  */
 
 export * from './checks.js';

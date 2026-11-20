@@ -1,5 +1,5 @@
 /**
- * Untitled Analytics Node.js SDK: server events (secret key) and Electron
+ * ManaLens Node.js SDK: server events (secret key) and Electron
  * main-process or game server app events (publishable key).
  *
  * @packageDocumentation

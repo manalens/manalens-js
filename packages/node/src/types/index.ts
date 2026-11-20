@@ -1,4 +1,4 @@
-// Type definitions for the Untitled Analytics Node SDK.
+// Type definitions for the ManaLens Node SDK.
 
 /** `server`: a backend with the secret key. `app`: the Electron main process or a process on the player's machine, with the publishable key. */
 export type Mode = 'server' | 'app';
