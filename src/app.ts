@@ -4,7 +4,7 @@
  * `context.page`; the channel stays `web`. The App filters and breakdowns
  * (platform, storefront, version, build, engine) and "errors by build" read it.
  *
- * The enums and limits mirror the collector (untitled-analytics
+ * The enums and limits mirror the collector (manalens
  * packages/shared/src/app-context.ts and appInfoSchema). An invalid object
  * would make the collector refuse every event, so the SDK drops it with a
  * console warning and sends plain web events.
@@ -46,7 +46,7 @@ export function appInfoProblem(app: unknown): string | null {
 export function resolveAppInfo(app: unknown, warn: (message: string) => void = message => console.warn(message)): AppInfo | undefined {
   if (app === undefined || app === null) return undefined;
   const problem = appInfoProblem(app);
-  if (problem) { warn(`Untitled Analytics: the app option is ignored (${problem}). Events are sent without context.app.`); return undefined; }
+  if (problem) { warn(`Manalens: the app option is ignored (${problem}). Events are sent without context.app.`); return undefined; }
   const value = app as AppInfo;
   return {
     platform: value.platform,

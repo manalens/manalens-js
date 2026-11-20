@@ -3,19 +3,16 @@ import { appInfoFromDataset } from './app';
 import type { AnalyticsOptions } from './types';
 
 declare global {
-  interface Window { untitledAnalytics?: Analytics; }
+  interface Window { manalens?: Analytics; }
 }
 
 if (typeof document !== 'undefined') {
   const script = document.currentScript as HTMLScriptElement | null;
-  // data-publishable-key; data-write-key is its old name and still works.
   const publishableKey = script?.dataset.publishableKey;
-  const writeKey = script?.dataset.writeKey;
   const endpoint = script?.dataset.endpoint;
-  if ((publishableKey || writeKey) && endpoint) {
-    window.untitledAnalytics = new Analytics({
+  if (publishableKey && endpoint) {
+    window.manalens = new Analytics({
       publishableKey,
-      writeKey,
       endpoint,
       crossSubdomainCookies: script?.dataset.crossSubdomain !== 'false',
       requireConsent: script?.dataset.requireConsent === 'true',
@@ -27,6 +24,6 @@ if (typeof document !== 'undefined') {
       app: appInfoFromDataset(script?.dataset ?? {}) as AnalyticsOptions['app'],
     });
     // The snippet form of the ready option: listen on window for this event.
-    if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('untitled-analytics:ready', { detail: window.untitledAnalytics }));
+    if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('manalens:ready', { detail: window.manalens }));
   }
 }

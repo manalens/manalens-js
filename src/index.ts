@@ -8,8 +8,8 @@ import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 import { resolveAppInfo, type AppInfo } from './app';
 
 /** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
-export const LIBRARY_NAME = 'Untitled Analytics Web SDK';
-export const LIBRARY_VERSION = '0.4.0';
+export const LIBRARY_NAME = 'Manalens Web SDK';
+export const LIBRARY_VERSION = '0.5.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
 export type { TrackingOptions } from './tracking';
@@ -18,20 +18,14 @@ export { logLevels } from './logger';
 export type { AppInfo } from './app';
 export { appPlatforms, appStorefronts, appEngines } from './app';
 
-/** Key prefixes that must never be used in browser code (secret key, API keys). */
-const privateKeyPrefixes = ['ua_sk_', 'ua_api_', 'ua_mcp_'];
+/** The publishable key prefix; secret keys (`mana_sk_`) and API keys (`mana_api_`) never go in browser code. */
+const PUBLISHABLE_KEY_PREFIX = 'mana_pk_';
 
-/**
- * The publishable key from `publishableKey`, or from `writeKey` (its old,
- * deprecated name). Both with different values is an error, so a page never
- * sends events to a project it did not mean.
- */
-function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey' | 'writeKey'>): string {
-  const { publishableKey, writeKey } = options;
-  if (publishableKey && writeKey && publishableKey !== writeKey) throw new Error('Give one key: publishableKey (writeKey is its old name). The two values differ');
-  const key = publishableKey || writeKey;
+/** The publishable key. Any value without the `mana_pk_` prefix is an error. */
+function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey'>): string {
+  const key = options.publishableKey;
   if (!key) throw new Error('publishableKey and endpoint are required');
-  if (privateKeyPrefixes.some(prefix => key.startsWith(prefix))) throw new Error('publishableKey must be the publishable key (ua_pk_...). Never put a secret key or an API key in browser code');
+  if (!key.startsWith(PUBLISHABLE_KEY_PREFIX)) throw new Error('publishableKey must be the publishable key (mana_pk_...). Never put a secret key or an API key in browser code');
   return key;
 }
 
@@ -103,7 +97,7 @@ export class Analytics {
   private consent?: boolean;
   /** identify() made before consent, sent when consent is granted. */
   private deferredIdentify?: Traits;
-  /** A game handoff (`ua_hid`) read on load, sent once identity is allowed (P-2523). */
+  /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
   private acquisition?: AnalyticsEvent['context'];
@@ -115,7 +109,7 @@ export class Analytics {
   private readonly onVisibilityChange = () => {
     if (document.visibilityState === 'hidden') { this.sendPendingPage(); void this.flush(true); }
   };
-  /** `ua:navigate`: the app says the new page is ready, so send at once. */
+  /** `manalens:navigate`: the app says the new page is ready, so send at once. */
   private readonly onNavigation = () => { this.page(); };
   /**
    * Back or forward. The URL is already new, but the framework has not yet
@@ -176,7 +170,7 @@ export class Analytics {
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
     this.start();
     if (options.ready) {
-      try { options.ready(this); } catch (error) { console.error('[Untitled Analytics] Error in the ready callback:', error); }
+      try { options.ready(this); } catch (error) { console.error('[Manalens] Error in the ready callback:', error); }
     }
   }
 
@@ -207,7 +201,7 @@ export class Analytics {
       this.historyPathname = location.pathname;
       installHistoryHooksOnce();
       window.addEventListener('popstate', this.onPopState);
-      window.addEventListener('ua:navigate', this.onNavigation);
+      window.addEventListener('manalens:navigate', this.onNavigation);
       window.addEventListener(HISTORY_EVENT, this.onHistoryChange);
     }
     this.logger.log('info', `Initialized (autoPageviews: ${this.options.autoPageviews}, consent required: ${this.options.requireConsent === true})`);
@@ -548,7 +542,7 @@ export class Analytics {
     this.logger.log('error', message);
     const handler = this.options.errorHandler;
     if (typeof handler !== 'function') return;
-    try { handler(new SendError(message, status, dropped, reasons)); } catch (error) { console.error('[Untitled Analytics] Error in the errorHandler callback:', error); }
+    try { handler(new SendError(message, status, dropped, reasons)); } catch (error) { console.error('[Manalens] Error in the errorHandler callback:', error); }
   }
 
   destroy(): void {
@@ -560,7 +554,7 @@ export class Analytics {
       window.removeEventListener('pagehide', this.onPageHide);
       document.removeEventListener?.('visibilitychange', this.onVisibilityChange);
       window.removeEventListener('popstate', this.onPopState);
-      window.removeEventListener('ua:navigate', this.onNavigation);
+      window.removeEventListener('manalens:navigate', this.onNavigation);
     }
     this.pending = [];
     this.attempts.clear();
@@ -573,13 +567,13 @@ function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
-/** Game to website identity handoff (P-2523): `?ua_hid=<game anonymous ID>.<unix seconds>`. */
-const HANDOFF_PARAM = 'ua_hid';
+/** Game to website identity handoff (P-2523): `?mana_hid=<game anonymous ID>.<unix seconds>`. */
+const HANDOFF_PARAM = 'mana_hid';
 const HANDOFF_EVENT = 'identity_handoff';
 const HANDOFF = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(\d{1,12})$/i;
 type Handoff = { source: string; at: number };
 
-/** Read `ua_hid` and remove it from the address bar (other parameters and the hash stay). */
+/** Read `mana_hid` and remove it from the address bar (other parameters and the hash stay). */
 function takeHandoff(): Handoff | undefined {
   if (typeof location === 'undefined') return undefined;
   let url: URL;
@@ -593,7 +587,7 @@ function takeHandoff(): Handoff | undefined {
 }
 
 /** Dispatched on window after history.pushState / replaceState. */
-const HISTORY_EVENT = 'ua:historychange';
+const HISTORY_EVENT = 'manalens:historychange';
 
 /**
  * Wrap history.pushState / replaceState once per history object, whatever the
@@ -604,7 +598,7 @@ const HISTORY_EVENT = 'ua:historychange';
 function installHistoryHooksOnce(): void {
   if (typeof history === 'undefined' || typeof window === 'undefined') return;
   const marked = history as History & Record<symbol, boolean>;
-  const marker = Symbol.for('untitled-analytics.historyWrapped');
+  const marker = Symbol.for('manalens.historyWrapped');
   if (marked[marker]) return;
   marked[marker] = true;
   for (const name of ['pushState', 'replaceState'] as const) {

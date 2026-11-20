@@ -15,7 +15,7 @@ const server = createServer(async (request, response) => {
     for await (const chunk of request) body += chunk;
     try {
       const batch = JSON.parse(body);
-      if (request.headers['x-publishable-key'] !== 'ua_example' || !Array.isArray(batch.events)) throw new Error('Invalid example request');
+      if (request.headers['x-publishable-key'] !== 'mana_pk_example' || !Array.isArray(batch.events)) throw new Error('Invalid example request');
       captured.push(...batch.events);
       response.writeHead(202, { 'content-type': 'application/json' }).end(JSON.stringify({ accepted: batch.events.length }));
     } catch { response.writeHead(400).end(); }
