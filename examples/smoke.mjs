@@ -641,7 +641,7 @@ test('a session is at most 24 hours old: continuous activity starts a new sessio
   } finally { sdk.destroy(); }
 });
 
-test('a session stored by SDK 0.4.0 (no start time) is not continued: the first event starts a new session', async t => {
+test('a session stored by a pre-release SDK build (no start time) is not continued: the first event starts a new session', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const { jar } = browser('https://example.com/');
@@ -651,7 +651,7 @@ test('a session stored by SDK 0.4.0 (no start time) is not continued: the first 
     const cookie = jar.find('mana_').find(c => c.name.endsWith('_session-id'));
     assert.match(cookie.value, /^[a-f0-9-]{36}\.\d+\.\d+$/, 'stored as <uuid>.<last activity>.<start>');
     sdk.destroy();
-    // The old format, one minute old: valid for 0.4.0, and without a start time.
+    // The old format, one minute old: valid for the pre-release format, and without a start time.
     const old = '11111111-1111-4111-8111-111111111111';
     document.cookie = `${cookie.name}=${old}.${Date.now() - 60000}; max-age=1800; path=/`;
     for (const broken of [`${old}.${Date.now() - 60000}`, `${old}.${Date.now()}.`, `${old}.${Date.now()}.abc`, `${old}.x.${Date.now()}`]) {
