@@ -1,12 +1,12 @@
 import { EventQueue } from './queue/index.js';
 import { ValidationError, checkApp, isUUID, validateAppEvent, validateServerEvent } from './validators/index.js';
 import { compact, eventsUrl, isoTimestamp, randomUUID } from './utils/index.js';
-import { apiKeyPrefix, isWellFormedKey, legacyApiKeyPrefix, publishableKeyPrefix, secretKeyPrefix } from './utils/keys.js';
+import { apiKeyPrefix, isWellFormedKey, publishableKeyPrefix, secretKeyPrefix } from './utils/keys.js';
 import type { AnalyticsOptions, AppContext, AppInfo, IdentifyCall, Logger, Mode, ServerContext, TrackCall, WireEvent } from './types/index.js';
 
 /** Keep equal to package.json `version` (a unit test checks it). */
 export const SDK_VERSION = '0.1.0';
-export const LIBRARY_NAME = '@untitled-analytics/node';
+export const LIBRARY_NAME = '@manalens/node';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
 /** A session is never older than this: the collector's session rule does not use a client session of more than 24 hours. */
 const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -20,18 +20,18 @@ const MAX_BATCH: Record<Mode, number> = { server: 100, app: 50 };
  */
 export function checkKey(key: unknown, mode: Mode): asserts key is string {
   if (typeof key !== 'string' || key.length === 0) throw new Error('key is required');
-  if (key.startsWith(apiKeyPrefix) || key.startsWith(legacyApiKeyPrefix)) throw new Error('This is an API key: it reads and manages data and cannot send events. Use the secret key (ua_sk_) in server mode or the publishable key (ua_pk_) in app mode');
+  if (key.startsWith(apiKeyPrefix)) throw new Error('This is an API key: it reads and manages data and cannot send events. Use the secret key (mana_sk_) in server mode or the publishable key (mana_pk_) in app mode');
   if (mode === 'app') {
-    if (key.startsWith(secretKeyPrefix)) throw new Error('A secret key (ua_sk_) is not allowed in app mode. Never ship the secret key in a game build, a page or an Electron app. Use the publishable key (ua_pk_)');
+    if (key.startsWith(secretKeyPrefix)) throw new Error('A secret key (mana_sk_) is not allowed in app mode. Never ship the secret key in a game build, a page or an Electron app. Use the publishable key (mana_pk_)');
     if (key.startsWith(publishableKeyPrefix) && !isWellFormedKey(key)) throw new Error('The publishable key is malformed (wrong length or checksum)');
-    if (!isWellFormedKey(key)) throw new Error('app mode needs the project publishable key (ua_pk_...)');
+    if (!key.startsWith(publishableKeyPrefix)) throw new Error('app mode needs the project publishable key (mana_pk_...)');
   } else {
     if (key.startsWith(secretKeyPrefix)) {
       if (!isWellFormedKey(key)) throw new Error('The secret key is malformed (wrong length or checksum)');
       return;
     }
-    if (key.startsWith('ua_')) throw new Error('server mode needs the secret key (ua_sk_...). The publishable key only sends app and web events: use mode "app" in the Electron main process');
-    throw new Error('server mode needs the secret key (ua_sk_...)');
+    if (key.startsWith(publishableKeyPrefix)) throw new Error('server mode needs the secret key (mana_sk_...). The publishable key only sends app and web events: use mode "app" in the Electron main process');
+    throw new Error('server mode needs the secret key (mana_sk_...)');
   }
 }
 
@@ -39,10 +39,10 @@ export function checkKey(key: unknown, mode: Mode): asserts key is string {
  * Manalens for Node.js.
  *
  * - `server` mode (default): a backend or a dedicated game server sends
- *   `channel: 'server'` events with the secret key (`ua_sk_`).
+ *   `channel: 'server'` events with the secret key (`mana_sk_`).
  * - `app` mode: the Electron main process, or a process on the player's
  *   machine, sends `channel: 'app'` events with `context.app` and the
- *   publishable key (`ua_pk_`, or a legacy `ua_` key).
+ *   publishable key (`mana_pk_`).
  *
  * Events are batched. `track()` and `identify()` never throw for a bad event:
  * the SDK drops it and writes a debug log. Call `shutdown()` before the
@@ -50,12 +50,12 @@ export function checkKey(key: unknown, mode: Mode): asserts key is string {
  *
  * @example
  * ```ts
- * const analytics = new UntitledAnalytics(process.env.UA_SECRET_KEY!, { endpoint: 'https://collect.example.com' });
+ * const analytics = new Manalens(process.env.MANALENS_SECRET_KEY!, { endpoint: 'https://collect.example.com' });
  * analytics.track({ event: 'match_won', userId: 'player_1', properties: { map: 'harbor' }, context: { ip: req.ip } });
  * await analytics.shutdown();
  * ```
  */
-export class UntitledAnalytics {
+export class Manalens {
   readonly mode: Mode;
   private readonly queue: EventQueue;
   private readonly log: (message: string) => void;
@@ -75,7 +75,7 @@ export class UntitledAnalytics {
     checkKey(key, mode);
     this.mode = mode;
     const logger: Logger = options.logger ?? (message => console.warn(message));
-    this.log = options.debug ? message => logger(`[untitled-analytics] ${message}`) : () => {};
+    this.log = options.debug ? message => logger(`[manalens] ${message}`) : () => {};
 
     if (options.app !== undefined) {
       try { checkApp(options.app, 'app'); } catch (error) { throw new Error((error as Error).message); }
@@ -93,8 +93,8 @@ export class UntitledAnalytics {
     this.queue = new EventQueue({
       url: eventsUrl(options.endpoint),
       headers: mode === 'server'
-        ? { authorization: `Bearer ${key}`, 'user-agent': `untitled-analytics-node/${SDK_VERSION}` }
-        : { 'x-publishable-key': key, 'user-agent': `untitled-analytics-node/${SDK_VERSION}` },
+        ? { authorization: `Bearer ${key}`, 'user-agent': `manalens-node/${SDK_VERSION}` }
+        : { 'x-publishable-key': key, 'user-agent': `manalens-node/${SDK_VERSION}` },
       maxBatch: MAX_BATCH[mode],
       flushAt: options.flushAt,
       flushInterval: options.flushInterval,

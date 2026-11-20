@@ -3,19 +3,18 @@
 // two agree.
 //
 // New keys: <prefix><43 base62 characters><8 base62 characters: CRC32 of prefix + body>.
-// Prefixes: ua_pk_ (publishable), ua_sk_ (secret), ua_api_ (API).
-// Legacy keys: ua_... (publishable, no checksum) and ua_mcp_... (API).
+// Prefixes: mana_pk_ (publishable), mana_sk_ (secret), mana_api_ (API).
+// Any other value is refused.
 
-export const publishableKeyPrefix = 'ua_pk_';
-export const secretKeyPrefix = 'ua_sk_';
-export const apiKeyPrefix = 'ua_api_';
-export const legacyApiKeyPrefix = 'ua_mcp_';
+export const publishableKeyPrefix = 'mana_pk_';
+export const secretKeyPrefix = 'mana_sk_';
+export const apiKeyPrefix = 'mana_api_';
 
 const keyBodyLength = 43;
 const keyChecksumLength = 8;
 const base62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const checksummedPrefixes = [publishableKeyPrefix, secretKeyPrefix, apiKeyPrefix] as const;
-const newKeyShape = /^ua_(?:pk|sk|api)_[0-9A-Za-z]+$/;
+const newKeyShape = /^mana_(?:pk|sk|api)_[0-9A-Za-z]+$/;
 
 const crcTable = (() => {
   const table = new Uint32Array(256);
@@ -42,8 +41,8 @@ export function keyChecksum(prefixAndBody: string): string {
 }
 
 /**
- * True when a key may be valid: a new key needs the right length and checksum;
- * a legacy key (`ua_mcp_`, or `ua_` with no new prefix) passes. Anything else is false.
+ * True when a key may be valid: a known prefix, the right length and a valid
+ * checksum. Anything else is false.
  */
 export function isWellFormedKey(key: string): boolean {
   const prefix = checksummedPrefixes.find(candidate => key.startsWith(candidate));
@@ -52,5 +51,5 @@ export function isWellFormedKey(key: string): boolean {
     const split = key.length - keyChecksumLength;
     return keyChecksum(key.slice(0, split)) === key.slice(split);
   }
-  return key.startsWith('ua_') && key.length <= 256;
+  return false;
 }

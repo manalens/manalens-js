@@ -1,5 +1,5 @@
 {
-  "name": "@untitled-analytics/node",
+  "name": "@manalens/node",
   "version": "0.1.0",
   "description": "Manalens for Node.js: server events and Electron main-process app events.",
   "license": "MIT",

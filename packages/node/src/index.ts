@@ -5,7 +5,7 @@
  * @packageDocumentation
  */
 
-export { UntitledAnalytics, SDK_VERSION } from './UntitledAnalytics.js';
+export { Manalens, SDK_VERSION } from './Manalens.js';
 export { ValidationError } from './validators/index.js';
 export { APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES } from './types/index.js';
 export type {
