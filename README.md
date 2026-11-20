@@ -1,9 +1,9 @@
-# Untitled Analytics Web SDK
+# Manalens Web SDK
 
-## What is the Untitled Analytics Web SDK?
+## What is the Manalens Web SDK?
 
-The Untitled Analytics Web SDK is an
-[open source](https://github.com/yosriady/untitled-analytics-sdk) JavaScript
+The Manalens Web SDK is an
+[open source](https://github.com/manalens/manalens-js) JavaScript
 library for first-party web analytics and attribution. Use it to track page
 views, custom events and identified users in your website or web app, and to
 capture UTM parameters, referrers and ad click IDs (Google, Meta, Microsoft,
@@ -26,7 +26,7 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/@untitled-analytics/web@0.4.0/dist/snippet.global.js"
+  src="https://cdn.jsdelivr.net/npm/@manalens/web@0.5.0/dist/snippet.global.js"
   integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
   crossorigin="anonymous"
   data-publishable-key="YOUR_PUBLISHABLE_KEY"
@@ -39,24 +39,24 @@ Get the `integrity` value in one of two ways:
 - Copy the complete tag from the GitHub release notes for that version. The
   release workflow writes it after it checks that jsDelivr serves the
   published bytes.
-- Run `bash scripts/generate-sri.sh --version 0.4.0 --check-registry --check-cdn`.
+- Run `bash scripts/generate-sri.sh --version 0.5.0 --check-registry --check-cdn`.
   It downloads the published npm tarball, hashes `dist/snippet.global.js` from
   it, and checks that npm and jsDelivr serve the same bytes.
 
 Change the version in the URL and the hash together. See
 [Snippet attributes](#snippet-attributes) for options. The instance is
-available as `window.untitledAnalytics`.
+available as `window.manalens`.
 
 ### npm
 
 ```sh
-npm install @untitled-analytics/web
+npm install @manalens/web
 ```
 
 ## Browser storage
 
 On first load the SDK creates a random UUID `anonymous_id` and stores it in a
-first-party cookie (`ua_<hash of publishable key>_anonymous-id`, one year,
+first-party cookie (`mana_<hash of publishable key>_anonymous-id`, one year,
 `SameSite=Lax`, `Secure` on HTTPS). If the browser rejects the cookie, the ID
 goes to `localStorage` under the same key, and then to page memory. When a
 cookie later works again, the SDK adopts the stored ID into the cookie and
@@ -87,7 +87,7 @@ consent before analytics storage can use the optional consent mode below.
 ## Usage
 
 ```ts
-import { createAnalytics } from '@untitled-analytics/web';
+import { createAnalytics } from '@manalens/web';
 
 const analytics = createAnalytics({
   publishableKey: 'YOUR_PUBLISHABLE_KEY',
@@ -101,10 +101,10 @@ analytics.track('signup_completed', { plan: 'starter' });
 
 | Option | Default | Notes |
 | --- | --- | --- |
-| `publishableKey` | required | The project publishable key (`ua_pk_...`; older projects: `ua_...`). Safe to ship in a page or a game build. A secret key (`ua_sk_`) or an API key (`ua_api_`, `ua_mcp_`) throws an error. Sent in the `x-publishable-key` header. `writeKey` is its old name and still works (deprecated); giving both with different values throws an error. |
-| `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/ua`). The SDK posts to `<endpoint>/v0/events`. |
+| `publishableKey` | required | The project publishable key (`mana_pk_...`). Safe to ship in a page or a game build. Any other value, such as a secret key (`mana_sk_`) or an API key (`mana_api_`), throws an error. Sent in the `x-publishable-key` header. |
+| `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/mana`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
-| `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `ua:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
+| `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `manalens:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
 | `batchSize` | `10` | Events per request |
 | `flushIntervalMs` | `5000` | Flush timer |
 | `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
@@ -113,7 +113,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `tracking` | `true` | `false` is the same as `disabled: true`. An object sets rules: `{ excludeHosts, excludePaths, excludeTimezones, excludeQueryParams }`; see [Tracking rules](#tracking-rules) |
 | `disabled` | `false` | No events and no browser storage |
 | `logger` | off | `{ enabled: true, levels?: ['trace', 'debug', 'info', 'warn', 'error'] }`; see [Logging](#logging). Snippet: `data-debug="true"` |
-| `ready` | none | `(analytics) => void`, called once at the end of the constructor (also when disabled). Snippet: the `untitled-analytics:ready` event |
+| `ready` | none | `(analytics) => void`, called once at the end of the constructor (also when disabled). Snippet: the `manalens:ready` event |
 | `errorHandler` | none | `(error) => void`, called when events are dropped: refused by the collector, or a server error after `retryCount` retries. See [Delivery errors](#delivery-errors) |
 | `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
 
@@ -167,16 +167,16 @@ also when the SDK is disabled. An error thrown in it is caught and logged.
 createAnalytics({ publishableKey, endpoint, ready: analytics => analytics.track('app_loaded') });
 ```
 
-The snippet makes `window.untitledAnalytics` and then dispatches
-`untitled-analytics:ready` on `window` (`event.detail` is the instance). Add
-the listener before the snippet runs, or check `window.untitledAnalytics`
+The snippet makes `window.manalens` and then dispatches
+`manalens:ready` on `window` (`event.detail` is the instance). Add
+the listener before the snippet runs, or check `window.manalens`
 first:
 
 ```html
 <script>
   function onAnalytics(analytics) { analytics.track('app_loaded'); }
-  if (window.untitledAnalytics) onAnalytics(window.untitledAnalytics);
-  else window.addEventListener('untitled-analytics:ready', function (event) { onAnalytics(event.detail); }, { once: true });
+  if (window.manalens) onAnalytics(window.manalens);
+  else window.addEventListener('manalens:ready', function (event) { onAnalytics(event.detail); }, { once: true });
 </script>
 ```
 
@@ -265,7 +265,7 @@ Each event in `POST /v0/events` (`{ events: [...] }`) has `type` (`page`,
 and `user_id` are absent.
 
 The API prefix is `/v0`. SDK builds before this change posted to `/v1/events`,
-which the Untitled Analytics API no longer serves; use a build that posts to
+which the Manalens API no longer serves; use a build that posts to
 `/v0/events` with an API that has the `/v0` routes.
 
 ## Identify logged-in users
@@ -297,14 +297,14 @@ and does not touch browser storage.
 
 ## Players who come from your game
 
-A game that uses the Untitled Analytics Godot SDK can open your website with `UntitledAnalytics.link_url(url)`. The link has a `ua_hid` parameter: the game's anonymous ID and the time the game made the link.
+A game that uses the Manalens Godot SDK can open your website with `Manalens.link_url(url)`. The link has a `mana_hid` parameter: the game's anonymous ID and the time the game made the link.
 
 When the page loads, the SDK:
 
-1. Removes `ua_hid` from the address bar (`history.replaceState`). Other parameters and the hash stay.
+1. Removes `mana_hid` from the address bar (`history.replaceState`). Other parameters and the hash stay.
 2. Sends one `track` event `identity_handoff` with `source_anonymous_id` (the game's ID) and `handoff_at` (unix seconds).
 
-Untitled Analytics then counts the browser and the game install as one person, without `identify()`. The collector accepts a handoff for 10 minutes only, so a link that a player shares does not join other people. In consent mode the event waits for `setConsent(true)`. `setConsent(false)`, `optOut()` and `reset()` drop it. No setup is needed on the website.
+Manalens then counts the browser and the game install as one player, without `identify()`. The collector accepts a handoff for 10 minutes only, so a link that a player shares does not join other people. In consent mode the event waits for `setConsent(true)`. `setConsent(false)`, `optOut()` and `reset()` drop it. No setup is needed on the website.
 
 ## Optional consent mode
 
@@ -369,18 +369,17 @@ For the standard game events (`game_open`, `session_start`, `session_end`,
 
 ## Snippet attributes
 
-`data-publishable-key` and `data-endpoint` are required. The old attribute name
-`data-write-key` still works. The snippet shares identity across subdomains by default. Add
+`data-publishable-key` and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
 `data-cross-subdomain="false"` to set `crossSubdomainCookies: false`. Add
 `data-require-consent="true"` for consent mode and call
-`window.untitledAnalytics.setConsent(true)` from your banner. Add
+`window.manalens.setConsent(true)` from your banner. Add
 `data-auto-pageviews="false"` to send no automatic page views (call
-`window.untitledAnalytics.page()` yourself). Add `data-debug="true"` for
+`window.manalens.page()` yourself). Add `data-debug="true"` for
 console logs. Add the `data-app-*` attributes for a browser game (see above).
 
 | Attribute | Option |
 | --- | --- |
-| `data-publishable-key` (old name: `data-write-key`) | `publishableKey` (required) |
+| `data-publishable-key` | `publishableKey` (required) |
 | `data-endpoint` | `endpoint` (required) |
 | `data-cross-subdomain="false"` | `crossSubdomainCookies: false` |
 | `data-require-consent="true"` | `requireConsent: true` |
@@ -413,7 +412,7 @@ With `autoPageviews: true` (the default) the SDK sends:
   this page view waits, a `pushState` / `replaceState` adds no page view.
   When the page hides (`pagehide`, or `visibilitychange` to hidden), a
   waiting page view is sent at once with the flush, so it is never lost.
-- **`ua:navigate`**: dispatch `window.dispatchEvent(new Event('ua:navigate'))`
+- **`manalens:navigate`**: dispatch `window.dispatchEvent(new Event('manalens:navigate'))`
   after your router has shown the new page. The SDK sends at once (same
   path-and-query rule as `page()`).
 
@@ -436,7 +435,7 @@ and `cookiePolicy`.
 Releases publish from `.github/workflows/release.yml`:
 
 1. Bump `version` in `package.json` on `main`.
-2. Push a matching tag, for example `git tag v0.4.0 && git push origin v0.4.0`.
+2. Push a matching tag, for example `git tag v0.5.0 && git push origin v0.5.0`.
 3. The workflow checks that the tag is on `main` and matches `package.json`,
    runs typecheck, build and tests, packs the tarball, and publishes that exact
    tarball with npm provenance (after approval in the `npm-publish`

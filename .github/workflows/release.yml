@@ -164,7 +164,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      EXPECTED_NAME: '@untitled-analytics/web'
+      EXPECTED_NAME: '@manalens/web'
       EXPECTED_VERSION: ${{ needs.build.outputs.version }}
     steps:
       - name: Download package candidate
@@ -273,7 +273,7 @@ jobs:
             echo '```'
             echo
             echo '```sh'
-            echo "npm install @untitled-analytics/web@$VERSION"
+            echo "npm install @manalens/web@$VERSION"
             echo '```'
           } >> release-notes.md
           gh release edit "$TAG" --notes-file release-notes.md

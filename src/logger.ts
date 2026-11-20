@@ -30,6 +30,6 @@ export class Logger {
 
   log(level: LogLevel, message: string): void {
     if (!this.levels.has(level) || typeof console === 'undefined') return;
-    console[methods[level]](`[Untitled Analytics] ${message}`);
+    console[methods[level]](`[Manalens] ${message}`);
   }
 }
