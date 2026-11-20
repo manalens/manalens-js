@@ -57,7 +57,7 @@ export function clearAnonymousId(key: string): void {
 /**
  * The stored session when it is still current: at most 30 minutes since the
  * last activity and less than 24 hours since its start. A value in the format
- * of SDK 0.4.0 and older (`<uuid>.<last activity ms>`, no start time) is not
+ * of pre-release SDK builds (`<uuid>.<last activity ms>`, no start time) is not
  * current, so the first event after an SDK update starts a new session.
  */
 function storedSession(key: string, now: number): { id: string; startedAt: number } | undefined {
