@@ -26,7 +26,7 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/@manalens/web@0.5.0/dist/snippet.global.js"
+  src="https://cdn.jsdelivr.net/npm/@manalens/web@0.1.0/dist/snippet.global.js"
   integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
   crossorigin="anonymous"
   data-publishable-key="YOUR_PUBLISHABLE_KEY"
@@ -39,7 +39,7 @@ Get the `integrity` value in one of two ways:
 - Copy the complete tag from the GitHub release notes for that version. The
   release workflow writes it after it checks that jsDelivr serves the
   published bytes.
-- Run `bash scripts/generate-sri.sh --version 0.5.0 --check-registry --check-cdn`.
+- Run `bash scripts/generate-sri.sh --version 0.1.0 --check-registry --check-cdn`.
   It downloads the published npm tarball, hashes `dist/snippet.global.js` from
   it, and checks that npm and jsDelivr serve the same bytes.
 
@@ -252,7 +252,7 @@ await fetch('/api/checkout', {
 });
 ```
 
-A session that SDK 0.4.0 or older stored (it has no start time) is not
+A session that a pre-release SDK build stored (it has no start time) is not
 continued: the first event after the update starts a new session.
 
 ### Event envelope
@@ -435,7 +435,7 @@ and `cookiePolicy`.
 Releases publish from `.github/workflows/release.yml`:
 
 1. Bump `version` in `package.json` on `main`.
-2. Push a matching tag, for example `git tag v0.5.0 && git push origin v0.5.0`.
+2. Push a matching tag, for example `git tag v0.1.0 && git push origin v0.1.0`.
 3. The workflow checks that the tag is on `main` and matches `package.json`,
    runs typecheck, build and tests, packs the tarball, and publishes that exact
    tarball with npm provenance (after approval in the `npm-publish`

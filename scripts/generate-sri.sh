@@ -9,8 +9,8 @@
 # Usage:
 #   scripts/generate-sri.sh                         # npm pack this checkout (dry run)
 #   scripts/generate-sri.sh --tarball pkg.tgz       # hash an existing tarball
-#   scripts/generate-sri.sh --version 0.5.0         # download the published tarball from npm
-#   scripts/generate-sri.sh --version 0.5.0 --check-registry --check-cdn
+#   scripts/generate-sri.sh --version 0.1.0         # download the published tarball from npm
+#   scripts/generate-sri.sh --version 0.1.0 --check-registry --check-cdn
 #
 # Options:
 #   --tarball FILE     Hash this tarball instead of packing or downloading one.
