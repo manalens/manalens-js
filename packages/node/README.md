@@ -46,7 +46,7 @@ pnpm --filter @manalens/node typecheck
 pnpm --filter @manalens/node test       # tests/node-sdk.test.mjs (also part of pnpm test:unit)
 ```
 
-End-to-end test against the local stack (Postgres, ElasticMQ, Tinybird Local): `pnpm test:node-sdk:local` from the repository root. It makes a test-only project with a new publishable key and secret key, starts its own API, queue and worker, sends events in both modes and checks the rows in the Tinybird Local workspace of this checkout (run `pnpm build:tb:local` first). See `scripts/test-node-sdk-local.mjs`.
+End-to-end test against the local stack (Postgres, the ingest Workers from `pnpm dev:edge`, Tinybird Local): `pnpm test:node-sdk:local` from the repository root. It makes a test-only project with a new publishable key and secret key, starts its own API, sends events in both modes and checks the rows in the Tinybird Local workspace of this checkout (run `pnpm build:tb:local` first). See `scripts/test-node-sdk-local.mjs`.
 
 Not published to npm yet.
 
