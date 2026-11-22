@@ -155,14 +155,18 @@ export class Analytics {
     this.logger = new Logger(options.logger);
     this.options = {
       autoPageviews: true,
-      batchSize: 10,
-      flushIntervalMs: 5000,
+      // Fewer, larger requests (2026-11-22): each request costs a queue write, read and ack on the
+      // collector. 30 events stays under the collector's 50 and the 64 KB keepalive cap on pagehide;
+      // pagehide and visibilitychange still send at once, so nothing waits when a player leaves.
+      flushIntervalMs: 15000,
       ...options,
       // tracking: false is the same as disabled: true (Formo's boolean form).
       disabled: options.disabled === true || options.tracking === false,
       tracking: typeof options.tracking === 'object' && options.tracking !== null ? options.tracking : undefined,
       publishableKey,
       crossSubdomainCookies: options.crossSubdomainCookies !== false,
+      // Default 30; the collector refuses a batch of more than 50 events.
+      batchSize: clamp(options.batchSize, 1, 50, 30),
       retryCount: clamp(options.retryCount, 0, 10, 3),
       maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };

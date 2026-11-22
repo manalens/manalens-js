@@ -105,8 +105,8 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/mana`). The SDK posts to `<endpoint>/v0/events`. |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `manalens:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
-| `batchSize` | `10` | Events per request |
-| `flushIntervalMs` | `5000` | Flush timer |
+| `batchSize` | `30` | Events per request (the collector takes at most 50) |
+| `flushIntervalMs` | `15000` | Flush timer; the page hiding or closing sends at once |
 | `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
 | `maxQueueSize` | `512000` | Queue limit in bytes (200 to 500 KB). The oldest events are dropped first. |
 | `requireConsent` | `false` | Consent mode; see below |
