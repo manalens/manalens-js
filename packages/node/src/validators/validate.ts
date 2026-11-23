@@ -23,7 +23,9 @@ export const LIMITS = {
   userId: 255,
   sessionId: 64,
   stringValue: 1024,
-  traitKey: 100,
+  propertyKey: 100,
+  propertyKeys: 50,
+  propertiesBytes: 8 * 1024,
   locale: 32,
   userAgent: 1024,
   pagePath: 2048,
@@ -49,16 +51,23 @@ function checkString(field: string, value: unknown, max: number, min = 0): void 
   if (!isString(value) || value.length < min || value.length > max) fail(field, `must be a string of ${min} to ${max} characters`);
 }
 
-/** Property and trait values: string (up to 1024 characters), finite number, boolean or null. */
-export function checkProperties(field: string, value: unknown, keyMax?: number): void {
+/**
+ * Properties and traits: at most 50 keys of 1 to 100 characters, and at most
+ * 8 KB as JSON (UTF-8). Values: string (up to 1024 characters), finite number,
+ * boolean or null.
+ */
+export function checkProperties(field: string, value: unknown): void {
   if (!isObject(value)) fail(field, 'must be an object');
-  for (const [key, item] of Object.entries(value)) {
-    if (keyMax !== undefined && (key.length < 1 || key.length > keyMax)) fail(`${field} key`, `must be 1 to ${keyMax} characters`);
+  const entries = Object.entries(value);
+  if (entries.length > LIMITS.propertyKeys) fail(field, `must have at most ${LIMITS.propertyKeys} keys`);
+  for (const [key, item] of entries) {
+    if (key.length < 1 || key.length > LIMITS.propertyKey) fail(`${field} key`, `must be 1 to ${LIMITS.propertyKey} characters`);
     if (item === null || typeof item === 'boolean') continue;
     if (typeof item === 'number') { if (!Number.isFinite(item)) fail(`${field}.${key}`, 'must be a finite number'); continue; }
     if (typeof item === 'string') { if (item.length > LIMITS.stringValue) fail(`${field}.${key}`, `must be at most ${LIMITS.stringValue} characters`); continue; }
     fail(`${field}.${key}`, 'must be a string, number, boolean or null');
   }
+  if (Buffer.byteLength(JSON.stringify(value)) > LIMITS.propertiesBytes) fail(field, `must be at most ${LIMITS.propertiesBytes} bytes as JSON`);
 }
 
 /** `context.app` (strict: no other keys). */
@@ -121,7 +130,7 @@ function checkCommon(event: WireEvent, mode: Mode, now: number): void {
     if (!SESSION_ID.test(event.session_id)) fail('sessionId', 'may only use letters, digits and _ . : -');
   }
   if (event.properties !== undefined) checkProperties('properties', event.properties);
-  if (event.traits !== undefined) checkProperties('traits', event.traits, LIMITS.traitKey);
+  if (event.traits !== undefined) checkProperties('traits', event.traits);
 }
 
 /** Server event: `channel: 'server'`, user_id or anonymous_id, optional server context. */

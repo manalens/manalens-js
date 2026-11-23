@@ -3,7 +3,7 @@
 /** `server`: a backend with the secret key. `app`: the Electron main process or a process on the player's machine, with the publishable key. */
 export type Mode = 'server' | 'app';
 
-/** A property or trait value the collector accepts. Strings up to 1024 characters; numbers must be finite. */
+/** A property or trait value the collector accepts. Strings up to 1024 characters; numbers must be finite. An object has at most 50 keys of 1 to 100 characters and at most 8 KB of JSON. */
 export type PropertyValue = string | number | boolean | null;
 export type Properties = Record<string, PropertyValue>;
 
