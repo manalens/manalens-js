@@ -1074,6 +1074,57 @@ test('app option: the longest valid labels pass, and a copy is sent (later chang
   } finally { sdk.destroy(); }
 });
 
+// G-2525: the app-channel delivery spec of the game SDKs (manalens sdks/SPEC.md).
+// examples/fixtures/app-event.json is a copy of one event of the shared request
+// fixtures (manalens sdks/unity/Tests~/fixtures/request-1.json). Update it by
+// hand when those fixtures change.
+const appFixture = JSON.parse(await readFile(new URL('./fixtures/app-event.json', import.meta.url), 'utf8'));
+
+test('app option: the request has the shape of the game SDK request fixtures; only the channel and the page differ', async t => {
+  browser('https://game.example/play');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: appFixture.context.app });
+  try {
+    sdk.track(appFixture.event, appFixture.properties);
+    await sdk.flush();
+    assert.equal(sent.length, 1);
+    assert.deepEqual(Object.keys(sent[0].body), ['events'], 'the body is {"events":[...]}');
+    const [event] = sent[0].body.events;
+    assert.deepEqual(event.context.app, appFixture.context.app);
+    assert.equal(event.type, appFixture.type);
+    assert.equal(event.event, appFixture.event);
+    assert.deepEqual(event.properties, appFixture.properties);
+    assert.match(event.message_id, uuid);
+    assert.match(event.anonymous_id, uuid);
+    assert.ok(event.session_id, 'a session ID, as in app events');
+    for (const key of Object.keys(appFixture)) assert.ok(key in event, `the web event has ${key}`);
+    // The documented differences: the channel stays web, and the context has the page.
+    assert.equal(appFixture.channel, 'app');
+    assert.equal(event.channel, 'web');
+    assert.equal(event.context.page.path, '/play');
+  } finally { sdk.destroy(); }
+});
+
+test('delivery defaults are the web column of the SDK spec: 30 per batch, 15 s, 3 retries, 500 KiB', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', autoPageviews: false });
+  try {
+    const { batchSize, flushIntervalMs, retryCount, maxQueueSize } = sdk.options;
+    assert.deepEqual({ batchSize, flushIntervalMs, retryCount, maxQueueSize }, { batchSize: 30, flushIntervalMs: 15000, retryCount: 3, maxQueueSize: 512000 });
+    sdk.track('one');
+    t.mock.timers.tick(14999);
+    assert.equal(sent.length, 0, 'no send before 15 s');
+    t.mock.timers.tick(1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(eventsOf(sent).length, 1, 'the timer sends after 15 s');
+    for (let i = 0; i < 31; i++) sdk.track(`event_${i}`);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent[1].body.events.length, 30, 'a full batch of 30 sends at once');
+  } finally { sdk.destroy(); }
+});
+
 test('snippet data-app-* attributes set the app context', async () => {
   const { window, document } = browser('https://game.example/');
   document.currentScript = { dataset: { publishableKey: 'mana_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', appStorefront: 'itch', appVersion: '1.4.0', appBuild: '571', appEngine: 'other' } };

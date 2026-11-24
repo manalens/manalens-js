@@ -71,9 +71,9 @@ export interface AnalyticsOptions {
    * and call page() yourself, for example on a router's page-load event.
    */
   autoPageviews?: boolean;
-  /** Events per request, default 10. A full queue sends at once. */
+  /** Events per request, default 30, from 1 to 50 (the collector takes at most 50). A full batch sends at once. */
   batchSize?: number;
-  /** Send the queue every this many milliseconds, default 5000. */
+  /** Send the queue every this many milliseconds, default 15000. The page hiding or closing sends at once. */
   flushIntervalMs?: number;
   /**
    * How many times a batch is sent again after a server error (408, 429 or

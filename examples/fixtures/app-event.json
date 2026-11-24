@@ -1,0 +1,26 @@
+{
+  "type": "track",
+  "message_id": "00000000-0000-4000-8000-000000000005",
+  "channel": "app",
+  "version": "0.1.0",
+  "original_timestamp": "2027-01-15T08:00:00.000Z",
+  "context": {
+    "app": {
+      "platform": "windows",
+      "engine": "unity",
+      "app_version": "1.4.0",
+      "build": "571",
+      "storefront": "steam"
+    },
+    "locale": "en-US",
+    "library_name": "Manalens Unity SDK",
+    "library_version": "0.1.0"
+  },
+  "properties": {
+    "level": 3,
+    "mode": "story"
+  },
+  "anonymous_id": "00000000-0000-4000-8000-000000000001",
+  "session_id": "00000000-0000-4000-8000-000000000002",
+  "event": "level_start"
+}
