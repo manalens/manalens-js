@@ -75,6 +75,21 @@ async function refusalReason(response: { text?: () => Promise<string> }): Promis
   } catch { return { text: '', codes: [] }; }
 }
 
+/**
+ * The refused events of an accepted batch (P-2787): the collector stores the
+ * valid events and answers `{ accepted, rejected, errors: [{ index, message_id, code, message }] }`.
+ * Never throws: a body without a `rejected` count (an older collector) gives 0.
+ */
+async function refusedInAccepted(response: { text?: () => Promise<string> }): Promise<{ rejected: number; codes: string[] }> {
+  try {
+    const body = JSON.parse((await response.text?.()) ?? '') as { rejected?: unknown; errors?: unknown };
+    const rejected = typeof body?.rejected === 'number' && body.rejected > 0 ? Math.floor(body.rejected) : 0;
+    if (!rejected) return { rejected: 0, codes: [] };
+    const errors = Array.isArray(body.errors) ? body.errors as { code?: unknown }[] : [];
+    return { rejected, codes: [...new Set(errors.map(item => item?.code).filter((code): code is string => typeof code === 'string' && code.length > 0))] };
+  } catch { return { rejected: 0, codes: [] }; }
+}
+
 const clamp = (value: number | undefined, min: number, max: number, fallback: number) =>
   typeof value === 'number' && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
 
@@ -508,7 +523,11 @@ export class Analytics {
         for (const event of batch) this.attempts.delete(event.message_id);
         if (response.ok) {
           this.backoffStep = 0; this.retryAt = 0;
-          this.logger.log('debug', `Sent ${batch.length} event(s)`);
+          // An accepted batch can still list refused events: they are dropped, not sent again.
+          const refused = await refusedInAccepted(response);
+          const dropped = Math.min(batch.length, refused.rejected);
+          this.logger.log('debug', `Sent ${batch.length - dropped} event(s)`);
+          if (dropped) this.reportDropped(`The collector refused ${dropped} of ${batch.length} event(s): HTTP ${response.status}${refused.codes.length ? ` ${refused.codes.join(', ')}` : ''}. The events are dropped`, response.status, dropped, refused.codes);
         } else {
           // Dropped, not sent again. The reason of the collector goes to the log and to the errorHandler.
           const reason = await refusalReason(response);
