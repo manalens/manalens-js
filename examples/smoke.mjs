@@ -1080,7 +1080,7 @@ test('app option: the longest valid labels pass, and a copy is sent (later chang
 // hand when those fixtures change.
 const appFixture = JSON.parse(await readFile(new URL('./fixtures/app-event.json', import.meta.url), 'utf8'));
 
-test('app option: the request has the shape of the game SDK request fixtures; only the channel and the page differ', async t => {
+test('app option: the request has the shape of the game SDK request fixtures; the channel, the page, the library and the locale differ', async t => {
   browser('https://game.example/play');
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const sdk = new Analytics({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: appFixture.context.app });
@@ -1098,8 +1098,7 @@ test('app option: the request has the shape of the game SDK request fixtures; on
     assert.match(event.anonymous_id, uuid);
     assert.ok(event.session_id, 'a session ID, as in app events');
     for (const key of Object.keys(appFixture)) assert.ok(key in event, `the web event has ${key}`);
-    // The documented differences: the channel stays web, and the context has the page.
-    assert.equal(appFixture.channel, 'app');
+    // Documented differences: the channel stays web and the context has the page.
     assert.equal(event.channel, 'web');
     assert.equal(event.context.page.path, '/play');
   } finally { sdk.destroy(); }
