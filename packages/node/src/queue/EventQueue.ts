@@ -42,6 +42,22 @@ export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
+/**
+ * The refused events of an accepted batch (P-2787): the collector stores the
+ * valid events and lists the others in `errors`. Returns the count and the
+ * reason codes, or undefined when nothing was refused or the body is not the
+ * expected JSON. A refused event is never sent again.
+ */
+export function refusedEvents(text: string): { rejected: number; codes: string[] } | undefined {
+  let body: unknown;
+  try { body = JSON.parse(text); } catch { return undefined; }
+  const rejected = (body as { rejected?: unknown } | null)?.rejected;
+  if (typeof rejected !== 'number' || !(rejected > 0)) return undefined;
+  const errors = (body as { errors?: unknown }).errors;
+  const codes = Array.isArray(errors) ? [...new Set(errors.map(item => (item as { code?: unknown } | null)?.code).filter((code): code is string => typeof code === 'string'))] : [];
+  return { rejected, codes };
+}
+
 /** `Retry-After` in ms (seconds or an HTTP date), or undefined. */
 export function parseRetryAfter(header: string | null, now = Date.now()): number | undefined {
   if (!header) return undefined;
@@ -162,7 +178,12 @@ export class EventQueue {
       try {
         const signal = AbortSignal.any([this.stopper.signal, AbortSignal.timeout(this.timeout)]);
         const response = await this.fetcher(this.url, { method: 'POST', headers: this.headers, body, signal });
-        if (response.ok) return;
+        if (response.ok) {
+          // A body read or parse error never fails the send: the batch was accepted.
+          const refused = refusedEvents(await response.text().catch(() => ''));
+          if (refused) this.log(`dropped ${refused.rejected} of ${events.length} events: refused by the collector${refused.codes.length ? ` (${refused.codes.join(', ')})` : ''}`);
+          return;
+        }
         const text = await response.text().catch(() => '');
         reason = `HTTP ${response.status}${text ? ` ${text.slice(0, 300)}` : ''}`;
         if (!isRetryableStatus(response.status)) {
