@@ -225,8 +225,13 @@ createAnalytics({
   campaign parameters (see [Ad and campaign attribution](#ad-and-campaign-attribution)).
   Name one here to keep it out of every event, for example `['ref']` or
   `['gclid']`.
-- Unlike Formo's SDK, `localhost` is tracked unless you exclude it. Use
-  `excludeHosts: ['localhost']` or `tracking: false` in development.
+- The SDK tracks every host, **including `localhost`**. Manalens accepts
+  `localhost` events only when the project domain allows them. Dev and live
+  data go to the same project, so you can watch your own events in Activity
+  as you test. In a browser game, set `build` in the
+  [app context](#browser-and-electron-games) (for example `"dev"`) to tell
+  local and staging runs apart, and filter by it. To send nothing from some
+  environments, use `excludeHosts: ['localhost']` or `tracking: false`.
 
 ### Methods
 
