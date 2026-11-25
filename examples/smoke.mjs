@@ -719,6 +719,28 @@ test('a refusal with a reason: the error log and the errorHandler name the reaso
   } finally { sdk.destroy(); }
 });
 
+test('refused events of an accepted batch go to the error log and the errorHandler, and are not sent again (P-2787)', async t => {
+  browser('https://example.com/');
+  const body = { accepted: 1, rejected: 1, errors: [{ index: 1, message_id: 'x', code: 'INVALID_EVENT', message: 'properties: at most 50 keys' }] };
+  const sent = []; const errors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return sent.length === 1 ? { ok: true, status: 202, headers: { get: () => null }, text: async () => JSON.stringify(body) } : { ok: true, status: 202 };
+  });
+  t.mock.method(console, 'error', () => {});
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, logger: { enabled: true, levels: ['error'] }, errorHandler: error => errors.push(error) });
+  try {
+    sdk.track('one'); sdk.track('two'); await sdk.flush(); await sdk.flush();
+    assert.equal(sent.length, 1, 'nothing is sent again');
+    assert.equal(errors.length, 1);
+    assert.deepEqual([errors[0].status, errors[0].dropped, errors[0].reasons], [202, 1, ['INVALID_EVENT']]);
+    assert.match(errors[0].message, /The collector refused 1 of 2 event\(s\): HTTP 202 INVALID_EVENT\. The events are dropped/);
+    // A 202 from an older collector ({ accepted }) or with no readable body reports nothing.
+    sdk.track('next'); await sdk.flush();
+    assert.equal(errors.length, 1);
+  } finally { sdk.destroy(); }
+});
+
 const response = (status, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: name => headers[name.toLowerCase()] ?? null } });
 
 test('retry: a refused batch (400, 401, 403) is dropped, not sent again', async t => {

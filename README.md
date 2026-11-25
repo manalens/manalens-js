@@ -132,6 +132,10 @@ A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
   batch is dropped and is not sent again. `reasons` has the reason codes of
   the collector, and `message` (also in the error log) has its text, for
   example `HTTP 400 INVALID_EVENT, SESSION_ID_REQUIRED: ...`.
+- The collector accepted the batch (`202`) but refused some of its events,
+  for example an event over a properties limit. The valid events are stored;
+  the refused ones are dropped and are not sent again. `status` is `202`,
+  `dropped` is the number of refused events, and `reasons` has their codes.
 - A server error (408, 429, 5xx) repeated more than `retryCount` times.
 
 Network errors (offline) do not call it: those events wait in memory and go
