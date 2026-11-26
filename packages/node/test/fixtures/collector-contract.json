@@ -13,6 +13,11 @@
       "web",
       "android",
       "ios",
+      "ps5",
+      "xbox_series",
+      "xbox_one",
+      "switch",
+      "switch2",
       "other"
     ],
     "storefronts": [
@@ -22,6 +27,9 @@
       "gog",
       "app_store",
       "play",
+      "psn",
+      "xbox",
+      "nintendo",
       "other"
     ],
     "engines": [

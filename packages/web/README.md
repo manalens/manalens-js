@@ -360,8 +360,8 @@ analytics.track('game_open', { is_first_open: true });
 
 | Field | Values |
 | --- | --- |
-| `platform` | required: `windows`, `macos`, `linux`, `web`, `android`, `ios`, `other` |
-| `storefront` | `steam`, `itch`, `epic`, `gog`, `app_store`, `play`, `other` |
+| `platform` | required: `windows`, `macos`, `linux`, `web`, `android`, `ios`, `ps5`, `xbox_series`, `xbox_one`, `switch`, `switch2`, `other` |
+| `storefront` | `steam`, `itch`, `epic`, `gog`, `app_store`, `play`, `psn`, `xbox`, `nintendo`, `other` |
 | `app_version` | 1 to 32 characters: letters, digits, `.`, `_`, `+`, `-` and space |
 | `build` | 1 to 64 characters, same characters as `app_version` |
 | `engine` | `godot`, `unity`, `unreal`, `other` |

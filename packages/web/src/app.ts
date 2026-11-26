@@ -9,8 +9,8 @@
  * would make the collector refuse every event, so the SDK drops it with a
  * console warning and sends plain web events.
  */
-export const appPlatforms = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'other'] as const;
-export const appStorefronts = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'other'] as const;
+export const appPlatforms = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'ps5', 'xbox_series', 'xbox_one', 'switch', 'switch2', 'other'] as const;
+export const appStorefronts = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'psn', 'xbox', 'nintendo', 'other'] as const;
 export const appEngines = ['godot', 'unity', 'unreal', 'other'] as const;
 
 export interface AppInfo {

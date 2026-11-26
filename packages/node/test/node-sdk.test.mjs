@@ -80,7 +80,8 @@ test('app mode refuses a secret key and accepts a publishable key', () => {
   assert.doesNotThrow(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app }));
   assert.throws(() => new Manalens(OLD_KEY, { endpoint: ENDPOINT, mode: 'app', app }), /publishable key/);
   assert.throws(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app' }), /app option/);
-  assert.throws(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app: { platform: 'switch' } }), /platform/);
+  assert.throws(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app: { platform: 'ps4' } }), /platform/);
+  assert.doesNotThrow(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app: { platform: 'switch2', storefront: 'nintendo' } }));
   assert.throws(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app, anonymousId: 'nope' }), /UUID/);
 });
 

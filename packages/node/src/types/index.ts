@@ -8,8 +8,8 @@ export type PropertyValue = string | number | boolean | null;
 export type Properties = Record<string, PropertyValue>;
 
 // Keep these lists equal to the collector's (the contract test checks it).
-export const APP_PLATFORMS = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'other'] as const;
-export const APP_STOREFRONTS = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'other'] as const;
+export const APP_PLATFORMS = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'ps5', 'xbox_series', 'xbox_one', 'switch', 'switch2', 'other'] as const;
+export const APP_STOREFRONTS = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'psn', 'xbox', 'nintendo', 'other'] as const;
 export const APP_ENGINES = ['godot', 'unity', 'unreal', 'other'] as const;
 export const DEVICES = ['desktop', 'mobile', 'tablet'] as const;
 export const OSES = ['windows', 'macos', 'ios', 'android', 'linux', 'other'] as const;
