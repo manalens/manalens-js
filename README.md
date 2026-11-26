@@ -32,6 +32,24 @@ pnpm test        # every package (see TESTING.md)
 
 Run one package with a filter, for example `pnpm --filter @manalens/node test`.
 
+## Security
+
+- **Zero runtime dependencies.** `@manalens/web` and `@manalens/node` have no
+  `dependencies`, `optionalDependencies`, `peerDependencies`, or
+  `bundleDependencies`, and no install scripts (`preinstall`, `install`,
+  `postinstall`, `prepare`). When you install them, you install only our code,
+  and nothing runs at install time. `pnpm test` fails if this changes
+  (`scripts/zero-dependencies.test.mjs`).
+- **Signed releases.** Both packages publish from GitHub Actions with npm
+  trusted publishing (OIDC) and provenance. No npm token exists.
+- **Dev dependencies.** `pnpm-workspace.yaml` refuses versions younger than 7
+  days, non-registry transitive dependencies, and trust downgrades. Only
+  `esbuild` may run an install script. CI checks every install with
+  [Aikido Safe Chain](https://github.com/AikidoSec/safe-chain) and runs
+  `pnpm audit`. Dependabot waits 7 days before it proposes an update.
+
+Report a vulnerability to support@manalens.dev.
+
 ## Releasing
 
 Each pull request that changes a package adds a changeset (`pnpm changeset`).

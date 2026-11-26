@@ -1,4 +1,21 @@
 packages:
   - packages/*
+
+# Supply-chain settings (see README, Security). Both published packages have
+# zero runtime dependencies; these settings guard the dev dependencies.
+# Refuse versions younger than 7 days (in minutes): most malicious releases
+# are found and pulled within that time.
+minimumReleaseAge: 10080
+# Refuse transitive dependencies from git, tarball URLs, or other non-registry sources.
+blockExoticSubdeps: true
+# Refuse a version that has weaker publish trust (provenance, trusted publisher) than an earlier one.
+trustPolicy: no-downgrade
+# chokidar 4.0.3 (December 2024, needed by tsup) was published with less trust
+# evidence than 4.0.2. It is an old, widely used release, not a new takeover.
+trustPolicyExclude:
+  - chokidar@4.0.3
+autoInstallPeers: false
+audit: true
+# Only esbuild (used by tsup to build @manalens/web) may run its install script.
 allowBuilds:
   esbuild: true

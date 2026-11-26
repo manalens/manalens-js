@@ -1,0 +1,54 @@
+name: Security
+
+# Supply-chain checks (README, Security). The published packages have zero
+# runtime dependencies, so the audit covers the dev dependencies (build and
+# test tools). zizmor checks the workflows themselves.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: ./.github/actions/safe-chain
+      # All dependencies are dev dependencies, so no --prod. Fail on advisories,
+      # not on registry outages.
+      - run: pnpm audit --audit-level=high --ignore-registry-errors
+
+  zizmor:
+    name: zizmor (workflow analysis)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          version: 1.32.0
+          # Print the findings and fail the job; no code scanning upload.
+          advanced-security: false
+          min-severity: medium

@@ -54,6 +54,19 @@ package needs one placeholder publish from a maintainer's machine:
 4. Run the Release workflow with publish checked within 2 days: an unused
    trusted publisher expires.
 
+## Zero dependencies
+
+`@manalens/web` and `@manalens/node` must stay without runtime dependencies.
+Do not add `dependencies`, `optionalDependencies`, `peerDependencies`, or
+`bundleDependencies` to `packages/*/package.json`. Do not add a `preinstall`,
+`install`, `postinstall`, or `prepare` script. A customer who installs a
+package then gets only our code, and a compromised third-party package cannot
+reach them through us. `scripts/zero-dependencies.test.mjs` (part of
+`pnpm test`) fails on a change, and the publish job also refuses a tarball with
+an install script. If code from another package is necessary, copy the small
+part you need into `src/` with its license, or add it as a dev dependency that
+the build bundles.
+
 ## Notes
 
 - The "Version packages" pull request is made with the workflow's

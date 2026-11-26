@@ -2,7 +2,10 @@
 
 `pnpm typecheck`, `pnpm build`, and `pnpm test` at the root run every
 package. GitHub Actions (`.github/workflows/tests.yml`) runs all three on pull
-requests and main. `pnpm test` also runs `scripts/sync-versions.mjs --check`.
+requests and main. `pnpm test` also runs `scripts/sync-versions.mjs --check`
+and `scripts/zero-dependencies.test.mjs` (no runtime dependencies and no
+install scripts in either package). `.github/workflows/security.yml` runs
+`pnpm audit` and zizmor.
 
 On 2026-11-26 (local run; GitHub Actions did not run): `pnpm install --frozen-lockfile`,
 `pnpm typecheck`, and `pnpm build` passed, and `pnpm test` passed 89 web tests

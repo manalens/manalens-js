@@ -53,7 +53,6 @@
     "typecheck": "tsc --noEmit",
     "example": "pnpm build && node examples/server.mjs",
     "test:example": "pnpm build && node --test examples/smoke.mjs",
-    "prepare": "pnpm build",
     "test": "pnpm test:example",
     "sri": "bash scripts/generate-sri.sh"
   },

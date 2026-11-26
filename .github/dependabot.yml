@@ -1,0 +1,33 @@
+# Weekly updates with a 7-day cooldown: a new release waits a week before
+# Dependabot proposes it, the same rule as minimumReleaseAge in
+# pnpm-workspace.yaml. Security updates are not delayed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns:
+          - '*'
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # Both packages have zero runtime dependencies (README, Security): only
+    # dev dependencies exist, and they must stay dev dependencies.
+    allow:
+      - dependency-type: development
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        patterns:
+          - '*'

@@ -37,7 +37,9 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - name: Checkout
+      # changesets/action pushes the "Version packages" branch with these
+      # credentials. This job uploads no artifacts.
+      - name: Checkout # zizmor: ignore[artipacked]
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -50,6 +52,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      - name: Check packages with Aikido Safe Chain
+        uses: ./.github/actions/safe-chain
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -141,6 +146,9 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      - name: Check packages with Aikido Safe Chain
+        uses: ./.github/actions/safe-chain
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -278,7 +286,7 @@ jobs:
           if (pkg.name !== process.env.EXPECTED_NAME) throw new Error(`Unexpected package: ${pkg.name}`)
           if (pkg.version !== process.env.EXPECTED_VERSION) throw new Error(`Unexpected version: ${pkg.version}`)
           if (pkg.private) throw new Error('package.json is private')
-          for (const hook of ['preinstall', 'install', 'postinstall']) {
+          for (const hook of ['preinstall', 'install', 'postinstall', 'prepare']) {
             if (pkg.scripts?.[hook]) throw new Error(`Forbidden lifecycle hook: ${hook}`)
           }
           NODE
