@@ -1,6 +1,6 @@
 {
   "name": "@manalens/node",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Manalens for Node.js: server events and Electron main-process app events.",
   "keywords": [
     "game-analytics",

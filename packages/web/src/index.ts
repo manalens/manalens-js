@@ -9,7 +9,7 @@ import { resolveAppInfo, type AppInfo } from './app';
 
 /** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
 export const LIBRARY_NAME = 'Manalens Web SDK';
-export const LIBRARY_VERSION = '0.1.1';
+export const LIBRARY_VERSION = '0.2.0';
 
 export type { AnalyticsEvent, AnalyticsOptions, LinkRequest, LinkResult, Traits } from './types';
 export type { TrackingOptions } from './tracking';
