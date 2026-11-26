@@ -260,7 +260,6 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       # npm 11.5.1 or later publishes with trusted publishing (OIDC).
@@ -286,14 +285,13 @@ jobs:
           test ! -f inspect/package/binding.gyp || { echo "Forbidden implicit install hook: binding.gyp"; exit 1; }
           echo "tarball=${TARBALLS[0]}" >> "$GITHUB_ENV"
 
-      # Trusted publishing: npm exchanges the OIDC token of this job (workflow
-      # release.yml, environment npm-publish) for a publish token. NPM_TOKEN is
-      # only a fallback for the first publish of a package, before its trusted
-      # publisher exists on npmjs.com. Delete the secret after that.
+      # Trusted publishing only: npm exchanges the OIDC token of this job
+      # (workflow release.yml, environment npm-publish) for a short-lived
+      # publish token. No npm token is stored in GitHub. A new package gets
+      # its trusted publisher after a one-time placeholder publish from a
+      # maintainer's machine (RELEASING.md).
       - name: Publish with provenance
-        run: npm publish "$tarball" --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "$tarball" --provenance --access public --registry https://registry.npmjs.org
 
   release:
     name: GitHub release of ${{ matrix.package.name }}

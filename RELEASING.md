@@ -39,12 +39,20 @@ published version with the CDN every 6 hours.
 
 ## npm setup (once per package)
 
-- On npmjs.com, add a trusted publisher to the package: GitHub Actions,
-  repository `manalens/manalens-js`, workflow `release.yml`, environment
-  `npm-publish`.
-- npm can add a trusted publisher only to a package that exists. For the first
-  publish of a package, the workflow can use the `NPM_TOKEN` secret instead.
-  Delete the secret when both packages have a trusted publisher.
+Publishing uses only npm trusted publishing (OIDC). No npm token is stored in
+GitHub. npm can add a trusted publisher only to a package that exists, so a new
+package needs one placeholder publish from a maintainer's machine:
+
+1. `npm login` (with 2FA).
+2. `scripts/npm-bootstrap.sh @manalens/<name>`. It publishes the placeholder
+   version `0.0.0-bootstrap.0` (a README only, under the `bootstrap` dist-tag,
+   then deprecated) and runs `npm trust github` for repository
+   `manalens/manalens-js`, workflow `release.yml`, environment `npm-publish`.
+3. On npmjs.com, in the package settings, set Publishing access to "Require
+   two-factor authentication and disallow tokens". Trusted publishing still
+   works.
+4. Run the Release workflow with publish checked within 2 days: an unused
+   trusted publisher expires.
 
 ## Notes
 
