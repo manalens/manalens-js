@@ -1,7 +1,7 @@
 name: CDN hash check
 
 # Tamper alarm (P-2538): every published version on cdn.manalens.dev must serve the
-# exact dist/snippet.global.js of its npm tarball. The hash comes from the tarball,
+# exact dist/snippet.global.js of its @manalens/web npm tarball. The hash comes from the tarball,
 # whose sha512 must equal the registry's dist.integrity. A failed run emails the
 # repo admins. Before the first npm publish there is nothing to check.
 on:
@@ -33,7 +33,7 @@ jobs:
           fi
           for VERSION in $(node -p "[].concat(JSON.parse(process.argv[1])).join(' ')" "$VERSIONS"); do
             echo "::group::@manalens/web@$VERSION"
-            scripts/generate-sri.sh --version "$VERSION" --check-registry --check-cdn --attempts 3 --interval 20 >/dev/null
+            packages/web/scripts/generate-sri.sh --version "$VERSION" --check-registry --check-cdn --attempts 3 --interval 20 >/dev/null
             echo "::endgroup::"
           done
           echo "All versions on cdn.manalens.dev match npm."

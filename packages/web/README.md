@@ -39,7 +39,8 @@ Get the `integrity` value in one of two ways:
 - Copy the complete tag from the GitHub release notes for that version. The
   release workflow writes it after it checks that cdn.manalens.dev serves the
   published bytes.
-- Run `bash scripts/generate-sri.sh --version 0.1.0 --check-registry --check-cdn`.
+- Run `bash packages/web/scripts/generate-sri.sh --version 0.1.0 --check-registry --check-cdn`
+  from a clone of this repository.
   It downloads the published npm tarball, hashes `dist/snippet.global.js` from
   it, and checks that npm and cdn.manalens.dev serve the same bytes.
 
@@ -451,26 +452,18 @@ and `cookiePolicy`.
 
 ## Releasing
 
-Releases publish from `.github/workflows/release.yml`:
+Releases use Changesets and `.github/workflows/release.yml`. See
+[RELEASING.md](https://github.com/manalens/manalens-js/blob/main/RELEASING.md). The web release also checks that the npm
+registry serves the published tarball, hashes `dist/snippet.global.js` from it,
+waits until cdn.manalens.dev serves identical bytes, and adds the pinned snippet
+tag to the GitHub release notes (tag `web-vX.Y.Z`).
 
-1. Bump `version` in `package.json` on `main`.
-2. Push a matching tag, for example `git tag v0.1.0 && git push origin v0.1.0`.
-3. The workflow checks that the tag is on `main` and matches `package.json`,
-   runs typecheck, build and tests, packs the tarball, and publishes that exact
-   tarball with npm provenance (after approval in the `npm-publish`
-   environment).
-4. It then checks that the npm registry serves the same tarball, hashes
-   `dist/snippet.global.js` from it, waits until cdn.manalens.dev serves identical
-   bytes, and adds the pinned snippet tag to the GitHub release notes.
-
-Run the workflow manually (`workflow_dispatch`) for a dry run: it runs
-`npm publish --dry-run` and shows the SRI of the packed tarball in the job
-summary. Locally, `bash scripts/generate-sri.sh` packs this checkout and prints
-the tag without publishing.
+Locally, `bash scripts/generate-sri.sh` (in `packages/web`) packs this package
+and prints the tag without publishing.
 
 ## Local example and smoke check
 
-`pnpm example` builds the browser bundle and serves a self-contained example at
+In `packages/web`, `pnpm example` builds the browser bundle and serves a self-contained example at
 `http://localhost:4317`. Its local collector records page and button events at
 `/captured`. `pnpm test:example` exercises the built ESM package and browser
 snippet against a local collector, including URL sanitization, cookie and

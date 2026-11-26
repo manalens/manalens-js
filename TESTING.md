@@ -1,9 +1,17 @@
 # SDK tests
 
-On 2026-11-20, `pnpm typecheck` and all 86 tests in `pnpm test:example` passed (run locally).
-GitHub Actions runs both on pull requests and main.
+`pnpm typecheck`, `pnpm build`, and `pnpm test` at the root run every
+package. GitHub Actions (`.github/workflows/tests.yml`) runs all three on pull
+requests and main. `pnpm test` also runs `scripts/sync-versions.mjs --check`.
 
-The examples build the actual ESM and browser bundles. Tests cover page/custom
+On 2026-11-26 (local run; GitHub Actions did not run): `pnpm install --frozen-lockfile`,
+`pnpm typecheck`, and `pnpm build` passed, and `pnpm test` passed 89 web tests
+and 31 Node SDK tests. `npm publish --dry-run` passed for both packed tarballs,
+and the packed `@manalens/node` loads with `require` and `import`.
+
+## @manalens/web (packages/web)
+
+`pnpm test` runs `pnpm test:example`. The examples build the actual ESM and browser bundles. Tests cover page/custom
 events, the script snippet (including `data-cross-subdomain`), the first-party
 `anonymous_id` cookie with localStorage and memory fallbacks, cookie migration
 to the apex domain, publishable-key scoping (only `mana_pk_` keys pass), the 30-minute `session_id` and its 24-hour maximum age (also a stored session of a pre-release SDK build, which is not continued), `getSessionId()`, the reason codes of a refused batch, identify
@@ -16,8 +24,8 @@ access) and validation, the `app` option and `data-app-*` attributes (valid,
 invalid and dropped with a warning), publishable key prefix checks, pagehide keepalive flush, and lifecycle cleanup.
 
 ```sh
-pnpm typecheck
-pnpm test:example
+pnpm --filter @manalens/web typecheck
+pnpm --filter @manalens/web test:example
 ```
 
 The examples simulate browser APIs (including a `document.cookie` jar with
@@ -27,9 +35,29 @@ They do not establish real browser hydration or hosted collector behavior. The
 analytics monorepo's `docs/TESTING.md` describes the separate collector → SQS →
 worker → Tinybird Local integration suite and current verification limits.
 
+## @manalens/node (packages/node)
+
+`pnpm test` builds the package and runs `test/*.test.mjs` (node:test) against
+`dist/esm`, the published code. A mocked `fetch` stands in for the collector;
+there is no network. Tests cover key and mode checks (secret key in server
+mode, publishable key in app mode, API keys refused), the event envelope of
+both channels, app context, app sessions (30 minutes idle, 24 hours maximum),
+batch limits (100 server, 50 app), `flushAt` and `flushInterval`, retries with
+the same `message_id` (5xx, 408, 429, network errors), backoff, jitter and
+`Retry-After`, refused events of an accepted batch, validation (events dropped,
+never thrown), and `shutdown()`.
+
+The contract tests read `packages/node/test/fixtures/collector-contract.json`:
+the SDK must send the request bodies in it, and its app enums, key format, and
+property limits must agree. The Manalens collector repository keeps the same
+file (`tests/fixtures/node-sdk-contract.json`) and checks it against the
+collector schemas and key rules. Change both copies together. The end-to-end
+test against a local collector and Tinybird Local stays in that repository
+(`pnpm test:node-sdk:local`).
+
 ## Release tooling
 
-`scripts/generate-sri.sh` was checked locally on 2026-11-08 against `npm pack`
+`packages/web/scripts/generate-sri.sh` was checked locally on 2026-11-08 against `npm pack`
 output: its SHA-384 matches a direct `openssl` hash of
 `dist/snippet.global.js` from the tarball, and repeated packs give the same
 hash. It exits non-zero for an empty tarball, a missing or empty bundle, a

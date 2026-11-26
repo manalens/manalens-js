@@ -1,6 +1,6 @@
 # @manalens/node
 
-Manalens for Node.js. It sends `track` and `identify` events to `POST /v0/events` with batching, a flush timer and retries (exponential backoff with jitter, `Retry-After`). No dependencies. Node.js 20.3 or newer.
+Manalens for Node.js ([open source](https://github.com/manalens/manalens-js)). It sends `track` and `identify` events to `POST /v0/events` with batching, a flush timer and retries (exponential backoff with jitter, `Retry-After`). No dependencies. Node.js 20.3 or newer.
 
 Ported from `@formo/analytics-node` without the wallet code.
 
@@ -36,23 +36,38 @@ const analytics = new Manalens('mana_pk_...', {
 });
 ```
 
-Full guide: [docs/sdks/node.mdx](../../docs/sdks/node.mdx).
+Full guide: [docs.manalens.dev/sdks/node](https://docs.manalens.dev/sdks/node).
+
+## Install
+
+```sh
+npm install @manalens/node
+```
 
 ## Develop
+
+From the repository root (a pnpm workspace):
 
 ```bash
 pnpm --filter @manalens/node build      # dist/esm and dist/cjs
 pnpm --filter @manalens/node typecheck
-pnpm --filter @manalens/node test       # tests/node-sdk.test.mjs (also part of pnpm test:unit)
+pnpm --filter @manalens/node test       # builds, then runs test/*.test.mjs against dist/esm
 ```
 
-End-to-end test against the local stack (Postgres, the ingest Workers from `pnpm dev:edge`, Tinybird Local): `pnpm test:node-sdk:local` from the repository root. It makes a test-only project with a new publishable key and secret key, starts its own API, sends events in both modes and checks the rows in the Tinybird Local workspace of this checkout (run `pnpm build:tb:local` first). See `scripts/test-node-sdk-local.mjs`.
+The tests use a mocked `fetch` and no network. `test/fixtures/collector-contract.json`
+is the collector contract: the request bodies the SDK must send, the app enums,
+the key format and the property limits. The Manalens collector repository keeps
+the same file and checks it against the collector schemas, so change both
+copies together.
 
-Not published to npm yet.
+## Releasing
+
+Releases use Changesets. See [RELEASING.md](https://github.com/manalens/manalens-js/blob/main/RELEASING.md).
+The tag of a Node SDK release is `node-vX.Y.Z`.
 
 ## Layout
 
 - `src/Manalens.ts`: client, key and mode checks, event envelope.
 - `src/queue/EventQueue.ts`: batching, flush timer, retries.
-- `src/utils/keys.ts`: copy of `packages/shared/src/keys.ts` (prefixes, CRC32 checksum). A unit test checks that they agree.
+- `src/utils/keys.ts`: the key format of the collector (prefixes, CRC32 checksum). The contract test checks it.
 - `src/validators/`: the collector's rules, so a bad event is dropped and never fails a batch.

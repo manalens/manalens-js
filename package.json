@@ -1,0 +1,17 @@
+{
+  "name": "manalens-js",
+  "private": true,
+  "description": "Manalens JavaScript SDKs: @manalens/web (browsers) and @manalens/node (Node.js and Electron).",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm -r --workspace-concurrency=1 build",
+    "typecheck": "pnpm -r --workspace-concurrency=1 typecheck",
+    "test": "node scripts/sync-versions.mjs --check && pnpm -r --workspace-concurrency=1 test",
+    "changeset": "changeset",
+    "version-packages": "changeset version && node scripts/sync-versions.mjs"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^3.0.3"
+  },
+  "packageManager": "pnpm@11.9.0"
+}

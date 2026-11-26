@@ -13,13 +13,14 @@
     "analytics",
     "sdk"
   ],
-  "homepage": "https://github.com/manalens/manalens-js#readme",
+  "homepage": "https://github.com/manalens/manalens-js/tree/main/packages/web#readme",
   "bugs": {
     "url": "https://github.com/manalens/manalens-js/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/manalens/manalens-js.git"
+    "url": "git+https://github.com/manalens/manalens-js.git",
+    "directory": "packages/web"
   },
   "license": "MIT",
   "type": "module",
@@ -59,6 +60,5 @@
   "devDependencies": {
     "tsup": "^8.5.0",
     "typescript": "^5.9.0"
-  },
-  "packageManager": "pnpm@11.9.0"
+  }
 }

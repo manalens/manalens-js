@@ -14,7 +14,7 @@ const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
 const MAX_BATCH: Record<Mode, number> = { server: 100, app: 50 };
 
 /**
- * Check the key against the mode (rules of packages/shared/src/keys.ts).
+ * Check the key against the mode (the collector's key rules, see utils/keys.ts).
  * Throws on a wrong key: a secret key must never be used in app mode, and
  * server mode accepts only a well-formed secret key.
  */

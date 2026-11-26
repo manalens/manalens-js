@@ -1,0 +1,487 @@
+{
+  "about": [
+    "Collector contract of @manalens/node. The same file is in two repositories:",
+    "manalens (tests/fixtures/node-sdk-contract.json): checked against packages/shared (the collector schemas and key rules).",
+    "manalens-js (packages/node/test/fixtures/collector-contract.json): checked against the SDK.",
+    "Change both copies together. {{now}} is the send time and {{sdk_version}} the SDK version."
+  ],
+  "app_enums": {
+    "platforms": [
+      "windows",
+      "macos",
+      "linux",
+      "web",
+      "android",
+      "ios",
+      "other"
+    ],
+    "storefronts": [
+      "steam",
+      "itch",
+      "epic",
+      "gog",
+      "app_store",
+      "play",
+      "other"
+    ],
+    "engines": [
+      "godot",
+      "unity",
+      "unreal",
+      "other"
+    ]
+  },
+  "batch_limits": {
+    "server": 100,
+    "app": 50
+  },
+  "keys": [
+    {
+      "key": "mana_pk_18EzA6rrgBkEdDq5g20waPDRbcMfBbSHDE7mZ7z1HjD001YbSnO",
+      "well_formed": true
+    },
+    {
+      "key": "mana_pk_18azA6rrgBkEdDq5g20waPDRbcMfBbSHDE7mZ7z1HjD001YbSnO",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_18EzA6rrgBkEdDq5g20waPDRbcMfBbSHDE7mZ7z1HjD001YbSn",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_hjgTczxy5ZY9mQN0haUO2ESa6yqzFJ3jKsaNLRiEE0q002eSMDl",
+      "well_formed": true
+    },
+    {
+      "key": "mana_pk_hjaTczxy5ZY9mQN0haUO2ESa6yqzFJ3jKsaNLRiEE0q002eSMDl",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_hjgTczxy5ZY9mQN0haUO2ESa6yqzFJ3jKsaNLRiEE0q002eSMD",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_BNZ4Q9Qv2aIdBmSVxnRrC1q8ztXHG6pDjoyhw2e8BYm003Ec2fv",
+      "well_formed": true
+    },
+    {
+      "key": "mana_pk_BNa4Q9Qv2aIdBmSVxnRrC1q8ztXHG6pDjoyhw2e8BYm003Ec2fv",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_BNZ4Q9Qv2aIdBmSVxnRrC1q8ztXHG6pDjoyhw2e8BYm003Ec2f",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_57piBurRaMrpSEL0u9uMqolLM40NlymbL5zd3kl1Nhy001G9OY3",
+      "well_formed": true
+    },
+    {
+      "key": "mana_pk_57aiBurRaMrpSEL0u9uMqolLM40NlymbL5zd3kl1Nhy001G9OY3",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_57piBurRaMrpSEL0u9uMqolLM40NlymbL5zd3kl1Nhy001G9OY",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_dRhkvcIwJkLDaoBtxBwbUvtyjx263B4h6avhfodzZLD000ooNEF",
+      "well_formed": true
+    },
+    {
+      "key": "mana_sk_dRakvcIwJkLDaoBtxBwbUvtyjx263B4h6avhfodzZLD000ooNEF",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_dRhkvcIwJkLDaoBtxBwbUvtyjx263B4h6avhfodzZLD000ooNE",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_IAtnins22JRhOEpwfpLGZnWmwiywFallTCoNpNjoDMz0029j6y7",
+      "well_formed": true
+    },
+    {
+      "key": "mana_sk_IAanins22JRhOEpwfpLGZnWmwiywFallTCoNpNjoDMz0029j6y7",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_IAtnins22JRhOEpwfpLGZnWmwiywFallTCoNpNjoDMz0029j6y",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_HciudKuyS94sGBbEKQRTzVp4lwBUXwhRLfHUWuPF8Oy002DLLoJ",
+      "well_formed": true
+    },
+    {
+      "key": "mana_sk_HcaudKuyS94sGBbEKQRTzVp4lwBUXwhRLfHUWuPF8Oy002DLLoJ",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_HciudKuyS94sGBbEKQRTzVp4lwBUXwhRLfHUWuPF8Oy002DLLo",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_fQ8A8o7YSjw3xgacnqu3b1jrufbdmzZtswJmwoViXq40004TfZZ",
+      "well_formed": true
+    },
+    {
+      "key": "mana_sk_fQaA8o7YSjw3xgacnqu3b1jrufbdmzZtswJmwoViXq40004TfZZ",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_fQ8A8o7YSjw3xgacnqu3b1jrufbdmzZtswJmwoViXq40004TfZ",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_0UQHPUyztPFryVwCRaGnCcGNeVDX31xxZY8TxXTQt3L002bHA53",
+      "well_formed": true
+    },
+    {
+      "key": "mana_api_0aQHPUyztPFryVwCRaGnCcGNeVDX31xxZY8TxXTQt3L002bHA53",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_0UQHPUyztPFryVwCRaGnCcGNeVDX31xxZY8TxXTQt3L002bHA5",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_4oozz2bRvbqyP9N2nGZ5MyYX09xMeRVW7STCq6up8gh000omPGi",
+      "well_formed": true
+    },
+    {
+      "key": "mana_api_4aozz2bRvbqyP9N2nGZ5MyYX09xMeRVW7STCq6up8gh000omPGi",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_4oozz2bRvbqyP9N2nGZ5MyYX09xMeRVW7STCq6up8gh000omPG",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_yPQZmpJHESQUoeZDNXZOp8PKiWfPjoRBk0p7dUre7Q5002AkkRs",
+      "well_formed": true
+    },
+    {
+      "key": "mana_api_yaQZmpJHESQUoeZDNXZOp8PKiWfPjoRBk0p7dUre7Q5002AkkRs",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_yPQZmpJHESQUoeZDNXZOp8PKiWfPjoRBk0p7dUre7Q5002AkkR",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_Yb6ZMiRs0wJSqopIxBemOsgIw3PZPbuucik6067ezSM004SQBRG",
+      "well_formed": true
+    },
+    {
+      "key": "mana_api_Ya6ZMiRs0wJSqopIxBemOsgIw3PZPbuucik6067ezSM004SQBRG",
+      "well_formed": false
+    },
+    {
+      "key": "mana_api_Yb6ZMiRs0wJSqopIxBemOsgIw3PZPbuucik6067ezSM004SQBR",
+      "well_formed": false
+    },
+    {
+      "key": "ua_cccccccccccccccccccccccccccccccc",
+      "well_formed": false
+    },
+    {
+      "key": "mana_mcp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "well_formed": false
+    },
+    {
+      "key": "mana_sk_short",
+      "well_formed": false
+    },
+    {
+      "key": "mana_pk_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "well_formed": false
+    },
+    {
+      "key": "nope",
+      "well_formed": false
+    },
+    {
+      "key": "",
+      "well_formed": false
+    },
+    {
+      "key": "ua_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "well_formed": false
+    }
+  ],
+  "checksums": [
+    {
+      "text": "mana_pk_abc",
+      "checksum": "000rjruT"
+    },
+    {
+      "text": "mana_sk_ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "checksum": "000wJtJx"
+    },
+    {
+      "text": "mana_api_0123456789",
+      "checksum": "001CChvo"
+    },
+    {
+      "text": "",
+      "checksum": "00000000"
+    }
+  ],
+  "properties": [
+    {
+      "count": 50,
+      "value": 1,
+      "accepted": true
+    },
+    {
+      "count": 51,
+      "value": 1,
+      "accepted": false
+    },
+    {
+      "count": 1,
+      "key_length": 100,
+      "value": 1,
+      "accepted": true
+    },
+    {
+      "count": 1,
+      "key_length": 101,
+      "value": 1,
+      "accepted": false
+    },
+    {
+      "count": 1,
+      "key_length": 0,
+      "value": 1,
+      "accepted": false
+    },
+    {
+      "count": 7,
+      "value_char": "x",
+      "value_length": 1024,
+      "accepted": true
+    },
+    {
+      "count": 8,
+      "value_char": "x",
+      "value_length": 1024,
+      "accepted": false
+    },
+    {
+      "count": 3,
+      "value_char": "€",
+      "value_length": 1024,
+      "accepted": false
+    },
+    {
+      "count": 1,
+      "value_char": "x",
+      "value_length": 1025,
+      "accepted": false
+    }
+  ],
+  "requests": {
+    "server": {
+      "options": {
+        "app": {
+          "platform": "linux",
+          "engine": "godot"
+        }
+      },
+      "calls": [
+        [
+          "track",
+          {
+            "event": "match_won",
+            "userId": "player_1",
+            "anonymousId": "11111111-1111-4111-8111-111111111111",
+            "sessionId": "22222222-2222-4222-8222-222222222222",
+            "messageId": "33333333-3333-4333-8333-333333333331",
+            "properties": {
+              "map": "harbor",
+              "kills": 7,
+              "ranked": true,
+              "note": null
+            },
+            "context": {
+              "ip": "203.0.113.7",
+              "userAgent": "Mozilla/5.0 Test",
+              "locale": "en-SG",
+              "country": "sg",
+              "device": "desktop",
+              "os": "windows",
+              "browser": "chrome",
+              "page": {
+                "path": "/shop",
+                "title": "Shop",
+                "url": "https://example.com/shop"
+              }
+            }
+          }
+        ],
+        [
+          "identify",
+          {
+            "userId": "player_1",
+            "anonymousId": "11111111-1111-4111-8111-111111111111",
+            "messageId": "33333333-3333-4333-8333-333333333332",
+            "traits": {
+              "plan": "pro"
+            }
+          }
+        ]
+      ],
+      "body": {
+        "events": [
+          {
+            "type": "track",
+            "channel": "server",
+            "message_id": "33333333-3333-4333-8333-333333333331",
+            "original_timestamp": "{{now}}",
+            "event": "match_won",
+            "user_id": "player_1",
+            "properties": {
+              "map": "harbor",
+              "kills": 7,
+              "ranked": true,
+              "note": null
+            },
+            "anonymous_id": "11111111-1111-4111-8111-111111111111",
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "context": {
+              "ip": "203.0.113.7",
+              "user_agent": "Mozilla/5.0 Test",
+              "country": "sg",
+              "locale": "en-SG",
+              "device": "desktop",
+              "os": "windows",
+              "browser": "chrome",
+              "page": {
+                "path": "/shop",
+                "title": "Shop",
+                "url": "https://example.com/shop"
+              },
+              "app": {
+                "platform": "linux",
+                "engine": "godot"
+              },
+              "library_name": "@manalens/node",
+              "library_version": "{{sdk_version}}"
+            }
+          },
+          {
+            "type": "identify",
+            "channel": "server",
+            "message_id": "33333333-3333-4333-8333-333333333332",
+            "original_timestamp": "{{now}}",
+            "user_id": "player_1",
+            "traits": {
+              "plan": "pro"
+            },
+            "anonymous_id": "11111111-1111-4111-8111-111111111111",
+            "context": {
+              "app": {
+                "platform": "linux",
+                "engine": "godot"
+              },
+              "library_name": "@manalens/node",
+              "library_version": "{{sdk_version}}"
+            }
+          }
+        ]
+      }
+    },
+    "app": {
+      "options": {
+        "mode": "app",
+        "app": {
+          "platform": "windows",
+          "storefront": "steam",
+          "app_version": "1.4.0",
+          "build": "571",
+          "engine": "other"
+        },
+        "locale": "en",
+        "anonymousId": "11111111-1111-4111-8111-111111111111",
+        "sessionId": "22222222-2222-4222-8222-222222222222"
+      },
+      "calls": [
+        [
+          "track",
+          {
+            "event": "app_opened",
+            "messageId": "33333333-3333-4333-8333-333333333333",
+            "properties": {
+              "first_run": true
+            }
+          }
+        ],
+        [
+          "identify",
+          {
+            "userId": "steam:7656",
+            "messageId": "33333333-3333-4333-8333-333333333334",
+            "traits": {
+              "name": "Ana"
+            }
+          }
+        ]
+      ],
+      "body": {
+        "events": [
+          {
+            "type": "track",
+            "channel": "app",
+            "message_id": "33333333-3333-4333-8333-333333333333",
+            "original_timestamp": "{{now}}",
+            "event": "app_opened",
+            "properties": {
+              "first_run": true
+            },
+            "version": "{{sdk_version}}",
+            "anonymous_id": "11111111-1111-4111-8111-111111111111",
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "context": {
+              "app": {
+                "platform": "windows",
+                "storefront": "steam",
+                "app_version": "1.4.0",
+                "build": "571",
+                "engine": "other"
+              },
+              "locale": "en",
+              "library_name": "@manalens/node",
+              "library_version": "{{sdk_version}}"
+            }
+          },
+          {
+            "type": "identify",
+            "channel": "app",
+            "message_id": "33333333-3333-4333-8333-333333333334",
+            "original_timestamp": "{{now}}",
+            "user_id": "steam:7656",
+            "traits": {
+              "name": "Ana"
+            },
+            "version": "{{sdk_version}}",
+            "anonymous_id": "11111111-1111-4111-8111-111111111111",
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "context": {
+              "app": {
+                "platform": "windows",
+                "storefront": "steam",
+                "app_version": "1.4.0",
+                "build": "571",
+                "engine": "other"
+              },
+              "locale": "en",
+              "library_name": "@manalens/node",
+              "library_version": "{{sdk_version}}"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

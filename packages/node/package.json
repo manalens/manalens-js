@@ -2,8 +2,25 @@
   "name": "@manalens/node",
   "version": "0.1.0",
   "description": "Manalens for Node.js: server events and Electron main-process app events.",
+  "keywords": [
+    "game-analytics",
+    "server-side-analytics",
+    "electron",
+    "analytics",
+    "attribution",
+    "sdk",
+    "nodejs"
+  ],
+  "homepage": "https://github.com/manalens/manalens-js/tree/main/packages/node#readme",
+  "bugs": {
+    "url": "https://github.com/manalens/manalens-js/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manalens/manalens-js.git",
+    "directory": "packages/node"
+  },
   "license": "MIT",
-  "private": true,
   "type": "module",
   "engines": {
     "node": ">=20.3"
@@ -21,17 +38,24 @@
         "types": "./dist/cjs/index.d.ts",
         "default": "./dist/cjs/index.js"
       }
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "README.md"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.esm.json && tsc -p tsconfig.cjs.json && node scripts/cjs-package.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "cd ../.. && TSX_TSCONFIG_PATH=tests/tsconfig.json node --import tsx --test tests/node-sdk.test.mjs"
+    "test": "pnpm build && node --test test/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

@@ -1,5 +1,5 @@
 /**
- * Event checks. They mirror the collector's schemas (packages/shared/src/index.ts),
+ * Event checks. They mirror the collector's schemas (see the contract test),
  * so the SDK drops a bad event on its own and never sends a batch that the
  * collector refuses as a whole with 400.
  */

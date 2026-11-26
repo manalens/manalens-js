@@ -7,7 +7,7 @@ export type Mode = 'server' | 'app';
 export type PropertyValue = string | number | boolean | null;
 export type Properties = Record<string, PropertyValue>;
 
-// Keep these lists equal to packages/shared/src/app-context.ts (a unit test checks it).
+// Keep these lists equal to the collector's (the contract test checks it).
 export const APP_PLATFORMS = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'other'] as const;
 export const APP_STOREFRONTS = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'other'] as const;
 export const APP_ENGINES = ['godot', 'unity', 'unreal', 'other'] as const;

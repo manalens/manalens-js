@@ -1,6 +1,5 @@
-// Project key format. A copy of packages/shared/src/keys.ts (P-2524), so the
-// published SDK has no dependency on the monorepo. A unit test checks that the
-// two agree.
+// Project key format of the Manalens collector (P-2524). The contract test
+// (test/fixtures/collector-contract.json) checks that the two agree.
 //
 // New keys: <prefix><43 base62 characters><8 base62 characters: CRC32 of prefix + body>.
 // Prefixes: mana_pk_ (publishable), mana_sk_ (secret), mana_api_ (API).

@@ -1,14 +1,26 @@
-name: Publish Package
+name: Release
 
-# Real publishes run only from a strict semver tag (vX.Y.Z) on main.
-# workflow_dispatch is always a dry run: it builds, tests, packs, runs
-# `npm publish --dry-run`, and hashes the packed tarball. Nothing is published.
-# Adapted from getformo/sdk .github/workflows/release.yml.
+# Releases with Changesets (see RELEASING.md). Two packages: @manalens/web
+# (packages/web) and @manalens/node (packages/node).
+#
+# - Push to main: keep the "Version packages" pull request up to date. It bumps
+#   the versions and writes the changelogs from the files in .changeset/.
+#   Nothing is published.
+# - workflow_dispatch: build, test and pack each package whose version is not on
+#   npm yet. With publish unchecked (the default) it is a dry run. With publish
+#   checked, on main only, it publishes the packed tarballs with npm trusted
+#   publishing (OIDC) and provenance, then creates the tag and the GitHub
+#   release of each package (web-vX.Y.Z, node-vX.Y.Z). The web release waits
+#   until cdn.manalens.dev serves the published snippet.
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish to npm (unchecked = dry run)
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -17,40 +29,109 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build, test and pack
+  version-pr:
+    name: Version packages pull request
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    env:
-      EVENT: ${{ github.event_name }}
-      TAG: ${{ github.ref_name }}
-      COMMIT_SHA: ${{ github.sha }}
+      contents: write
+      pull-requests: write
     steps:
-      - name: Validate tag format
-        if: github.event_name == 'push'
-        run: |
-          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "Error: '$TAG' is not a strict semver release tag"
-            exit 1
-          fi
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Create or update the pull request
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          version-script: pnpm version-packages
+          commit-message: Version packages
+          pr-title: Version packages
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  plan:
+    name: Find unpublished versions
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      packages: ${{ steps.plan.outputs.packages }}
+      any: ${{ steps.plan.outputs.any }}
+    env:
+      PUBLISH: ${{ inputs.publish }}
+      REF: ${{ github.ref }}
+    steps:
+      - name: Only main can publish
+        if: inputs.publish
+        run: |
+          test "$REF" = refs/heads/main || { echo "Error: publish only from main (got $REF)"; exit 1; }
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
           persist-credentials: false
 
-      - name: Verify tag is on main
-        if: github.event_name == 'push'
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: List the packages whose version is not on npm
+        id: plan
         run: |
-          git fetch origin main
-          git merge-base --is-ancestor "$COMMIT_SHA" origin/main || {
-            echo "Error: release tags must point to a commit on main"
-            exit 1
+          node <<'NODE'
+          const fs = require('node:fs')
+          const { execFileSync } = require('node:child_process')
+          const packages = []
+          for (const dir of ['web', 'node']) {
+            const { name, version, private: isPrivate } = JSON.parse(fs.readFileSync(`packages/${dir}/package.json`, 'utf8'))
+            if (isPrivate) throw new Error(`${name} is private`)
+            let published = false
+            try {
+              published = execFileSync('npm', ['view', `${name}@${version}`, 'version'], { encoding: 'utf8' }).trim() === version
+            } catch {}
+            console.log(`${name}@${version}: ${published ? 'on npm, skip' : 'not on npm, release'}`)
+            if (!published) packages.push({ dir, name, version })
           }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `packages=${JSON.stringify(packages)}\nany=${packages.length > 0}\n`)
+          NODE
+
+  build:
+    name: Build, test and pack ${{ matrix.package.name }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
+    env:
+      DIR: ${{ matrix.package.dir }}
+      EXPECTED_NAME: ${{ matrix.package.name }}
+      EXPECTED_VERSION: ${{ matrix.package.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Setup pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
@@ -64,25 +145,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Verify package version
-        id: version
-        run: |
-          PACKAGE_VERSION=$(node -p "require('./package.json').version")
-          if [[ "$EVENT" == "push" ]]; then
-            test "${TAG#v}" = "$PACKAGE_VERSION" || {
-              echo "Error: tag $TAG does not match package.json $PACKAGE_VERSION"
-              exit 1
-            }
-          fi
-          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Typecheck, build and test
+      - name: Typecheck, build and test (all packages)
         run: |
           pnpm typecheck
           pnpm build
           pnpm test
 
       - name: Pack and inspect publish contents
+        working-directory: packages/${{ matrix.package.dir }}
         run: |
           mkdir -p "$RUNNER_TEMP/package"
           npm pack --json --ignore-scripts --pack-destination "$RUNNER_TEMP/package" > "$RUNNER_TEMP/pack.json"
@@ -90,11 +160,17 @@ jobs:
           const fs = require('node:fs')
           const reports = JSON.parse(fs.readFileSync(process.env.PACK_JSON, 'utf8'))
           if (reports.length !== 1) throw new Error(`Expected one tarball, got ${reports.length}`)
+          const { name, version } = reports[0]
+          if (name !== process.env.EXPECTED_NAME || version !== process.env.EXPECTED_VERSION) throw new Error(`Packed ${name}@${version}`)
           const files = reports[0].files.map(({ path }) => path)
           const forbidden = files.filter((path) => /(^|\/)(\.env|.*\.(pem|key|p12|pfx))$/i.test(path))
           if (forbidden.length) throw new Error(`Sensitive files in package: ${forbidden.join(', ')}`)
-          for (const required of ['dist/index.js', 'dist/index.d.ts', 'dist/snippet.global.js']) {
-            if (!files.includes(required)) throw new Error(`Missing ${required} in package`)
+          const required = {
+            web: ['dist/index.js', 'dist/index.d.ts', 'dist/snippet.global.js', 'LICENSE'],
+            node: ['dist/esm/index.js', 'dist/esm/index.d.ts', 'dist/cjs/index.js', 'dist/cjs/index.d.ts', 'dist/cjs/package.json', 'LICENSE'],
+          }[process.env.DIR]
+          for (const path of required) {
+            if (!files.includes(path)) throw new Error(`Missing ${path} in package`)
           }
           console.log(files.join('\n'))
           NODE
@@ -102,18 +178,21 @@ jobs:
       - name: Upload immutable package candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: npm-package
+          name: npm-${{ matrix.package.dir }}
           path: ${{ runner.temp }}/package/*.tgz
           if-no-files-found: error
           retention-days: 7
 
   dry-run:
-    name: Dry run (publish --dry-run and SRI of the packed tarball)
-    if: github.event_name == 'workflow_dispatch'
-    needs: build
+    name: Dry run ${{ matrix.package.name }}
+    if: ${{ !inputs.publish }}
+    needs: [plan, build]
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,7 +202,7 @@ jobs:
       - name: Download package candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: npm-package
+          name: npm-${{ matrix.package.dir }}
           path: package
 
       - name: Setup Node
@@ -142,10 +221,11 @@ jobs:
           echo "tarball=${TARBALLS[0]}" >> "$GITHUB_ENV"
 
       - name: SRI of the packed snippet
+        if: matrix.package.dir == 'web'
         shell: bash
         run: |
           set -euo pipefail
-          SNIPPET=$(scripts/generate-sri.sh --tarball "$tarball")
+          SNIPPET=$(packages/web/scripts/generate-sri.sh --tarball "$tarball")
           {
             echo "## Dry run: snippet tag (not published)"
             echo
@@ -155,22 +235,25 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
-    name: Publish approved tarball
-    if: github.event_name == 'push'
-    needs: build
+    name: Publish ${{ matrix.package.name }}
+    if: inputs.publish
+    needs: [plan, build]
     runs-on: ubuntu-latest
     environment: npm-publish
     permissions:
       contents: read
       id-token: write
+    strategy:
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
     env:
-      EXPECTED_NAME: '@manalens/web'
-      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+      EXPECTED_NAME: ${{ matrix.package.name }}
+      EXPECTED_VERSION: ${{ matrix.package.version }}
     steps:
       - name: Download package candidate
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: npm-package
+          name: npm-${{ matrix.package.dir }}
           path: package
 
       - name: Setup Node
@@ -180,6 +263,7 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
+      # npm 11.5.1 or later publishes with trusted publishing (OIDC).
       - name: Install exact npm publishing client
         run: npm install --global npm@11.18.0
 
@@ -202,21 +286,30 @@ jobs:
           test ! -f inspect/package/binding.gyp || { echo "Forbidden implicit install hook: binding.gyp"; exit 1; }
           echo "tarball=${TARBALLS[0]}" >> "$GITHUB_ENV"
 
+      # Trusted publishing: npm exchanges the OIDC token of this job (workflow
+      # release.yml, environment npm-publish) for a publish token. NPM_TOKEN is
+      # only a fallback for the first publish of a package, before its trusted
+      # publisher exists on npmjs.com. Delete the secret after that.
       - name: Publish with provenance
         run: npm publish "$tarball" --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   release:
-    name: Create GitHub release with the CDN snippet
-    if: github.event_name == 'push'
-    needs: [build, publish]
+    name: GitHub release of ${{ matrix.package.name }}
+    needs: [plan, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.packages) }}
     env:
-      TAG: ${{ github.ref_name }}
-      VERSION: ${{ needs.build.outputs.version }}
+      DIR: ${{ matrix.package.dir }}
+      NAME: ${{ matrix.package.name }}
+      VERSION: ${{ matrix.package.version }}
+      TAG: ${{ matrix.package.dir }}-v${{ matrix.package.version }}
+      COMMIT_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
@@ -228,7 +321,7 @@ jobs:
       - name: Download published tarball
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: npm-package
+          name: npm-${{ matrix.package.dir }}
           path: package
 
       - name: Setup Node
@@ -243,37 +336,49 @@ jobs:
       # bytes, and fails the job if either never matches. A CDN error body or an
       # empty body (sha384-OLBgp1Gs...) can never reach the release notes.
       - name: Compute SRI and wait for cdn.manalens.dev
+        if: matrix.package.dir == 'web'
         shell: bash
         run: |
           set -euo pipefail
           mapfile -t TARBALLS < <(find "$PWD/package" -maxdepth 1 -name '*.tgz' -type f)
           test "${#TARBALLS[@]}" -eq 1 || { echo "Expected exactly one tarball"; exit 1; }
-          scripts/generate-sri.sh --tarball "${TARBALLS[0]}" --version "$VERSION" \
+          packages/web/scripts/generate-sri.sh --tarball "${TARBALLS[0]}" --version "$VERSION" \
             --check-registry --check-cdn --attempts 20 --interval 30 > snippet.html
           test -s snippet.html
 
-      - name: Create release notes
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
-        with:
-          generate_release_notes: true
-
-      - name: Add the snippet tag to the release notes
+      - name: Write the release notes
         shell: bash
         run: |
           set -euo pipefail
-          gh release view "$TAG" --json body --jq .body > release-notes.md
+          # This version's section of the package changelog (written by Changesets).
+          CHANGELOG="packages/$DIR/CHANGELOG.md" node > release-notes.md <<'NODE'
+          const fs = require('node:fs')
+          const file = process.env.CHANGELOG
+          const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
+          const start = text.indexOf(`## ${process.env.VERSION}\n`)
+          if (start >= 0) {
+            const next = text.indexOf('\n## ', start + 1)
+            process.stdout.write(text.slice(text.indexOf('\n', start) + 1, next < 0 ? undefined : next).trim() + '\n')
+          }
+          NODE
           {
             echo
-            echo "## Install (CDN)"
-            echo
-            echo "Replace the publishable key and endpoint with your own values."
-            echo
-            echo '```html'
-            cat snippet.html
-            echo '```'
+            echo "## Install"
             echo
             echo '```sh'
-            echo "npm install @manalens/web@$VERSION"
+            echo "npm install $NAME@$VERSION"
             echo '```'
+            if [[ "$DIR" == web ]]; then
+              echo
+              echo "## Install (CDN)"
+              echo
+              echo "Replace the publishable key and endpoint with your own values."
+              echo
+              echo '```html'
+              cat snippet.html
+              echo '```'
+            fi
           } >> release-notes.md
-          gh release edit "$TAG" --notes-file release-notes.md
+
+      - name: Create the tag and the release
+        run: gh release create "$TAG" --target "$COMMIT_SHA" --title "$NAME $VERSION" --notes-file release-notes.md
