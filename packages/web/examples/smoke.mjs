@@ -2078,3 +2078,23 @@ test('errors: a 1 MB message and a 1 MB stack are cut before cleaning and parsin
     }
   } finally { sdk.destroy(); }
 });
+
+test('errors: key and token values are redacted across a newline and up to the closing quote, also when long', async t => {
+  const { window } = browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  // Spaces stop the long-token rule, so only the key-value rule can redact this.
+  const secret = 'pass word '.repeat(300);
+  assert.equal(secret.length, 3000);
+  try {
+    window.dispatchEvent(rejection('Login failed token:\n abc123'));
+    window.dispatchEvent(rejection(`Bad config secret="${secret}" end`));
+    window.dispatchEvent(rejection(`Unclosed password='${secret}`));
+    await sdk.flush();
+    const [newline, quoted, unclosed] = named(eventsOf(sent), 'error').map(event => event.properties.message);
+    assert.equal(newline, 'Login failed token:\n [redacted]');
+    assert.equal(quoted, 'Bad config secret="[redacted]" end');
+    assert.equal(unclosed, "Unclosed password='[redacted]");
+    for (const message of [quoted, unclosed]) assert.ok(!message.includes('pass word') && !message.includes('word '), 'no part of the secret is left');
+  } finally { sdk.destroy(); }
+});

@@ -140,7 +140,9 @@ export function cleanMessage(text: string): string {
   });
   out = out.replace(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}/g, '[email]');
   out = out.replace(/(bearer )([^\s"'<>()]+)/gi, (_all, name: string, value: string) => value === '[redacted]' ? name + value : `${name}[redacted]`);
-  out = out.replace(/(authorization|key|token|secret|password)(["']?[ \t]{0,16}[:=][ \t]{0,16})("[^"]{0,1024}"?|'[^']{0,1024}'?|[^\s"'<>()&,;\]}]{1,1024})/gi, (_all, name: string, sep: string, value: string) => {
+  // A value is redacted up to its closing quote or the end of the text. Once the separator matches, the value
+  // always matches, so each run of text is scanned once.
+  out = out.replace(/(authorization|key|token|secret|password)(["']?\s{0,16}[:=]\s{0,16})("[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s"'<>()&,;\]}]+)/gi, (_all, name: string, sep: string, value: string) => {
     if (/^\[redacted\]$/.test(value)) return name + sep + value;
     const quote = value[0] === '"' || value[0] === "'" ? value[0] : '';
     return `${name}${sep}${quote}[redacted]${quote && value.endsWith(quote) && value.length > 1 ? quote : ''}`;
