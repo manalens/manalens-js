@@ -237,7 +237,40 @@ createAnalytics({
 
 `page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
 `reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
-`getAnonymousId()`, `getSessionId()`, `flush(keepalive?)`, `destroy()`.
+`getAnonymousId()`, `getSessionId()`, `getClickIds()`, `flush(keepalive?)`, `destroy()`.
+
+### Ad click IDs
+
+When a visitor comes from an ad, the URL has a click ID: `gclid` (Google),
+`fbclid` (Meta), `msclkid` (Microsoft), `li_fat_id` (LinkedIn), `ttclid`
+(TikTok), `twclid` (X), `rdt_cid` (Reddit), `ScCid` (Snapchat), `gbraid` or
+`wbraid`. The SDK keeps the latest ID of each network in a first-party cookie
+for 90 days. With `crossSubdomainCookies` (the default), the cookie is on the
+apex domain, so `example.com` and `app.example.com` share it. It follows the
+same rules as the anonymous ID: nothing before consent, and `optOut()`,
+`reset()` and `setConsent(false)` delete it. A parameter in
+`tracking.excludeQueryParams` is never saved.
+
+Save the IDs on the account or order when the visitor signs up or pays.
+Weeks later, the ad network's own cookie is gone, and you can still send an
+offline conversion. In the browser:
+
+```ts
+await fetch('/api/signup', { method: 'POST', body: JSON.stringify({ email, clickIds: analytics.getClickIds() }) });
+// clickIds: { gclid: 'EAIaIQ...', captured_at: '2026-11-26T10:00:00.000Z' } or undefined
+```
+
+Or on your server, from the Cookie header (the helpers do not need a browser):
+
+```ts
+import { clickIdsCookieName, parseClickIds } from '@manalens/web';
+
+const name = clickIdsCookieName('mana_pk_...');
+const raw = cookieHeader.split('; ').find(part => part.startsWith(`${name}=`))?.slice(name.length + 1);
+const clickIds = parseClickIds(raw); // undefined when there is none
+```
+
+`parseClickIds` keeps only known networks and safe values.
 
 ### Sessions
 

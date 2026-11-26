@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
-import { Analytics } from '../dist/index.js';
+import { Analytics, clickIdsCookieName, parseClickIds } from '../dist/index.js';
 
 /** Minimal document.cookie emulation: host-only and domain cookies, expiry, public-suffix rejection. */
 function cookieJar({ blocked = false, publicSuffixes = ['com', 'test', 'co.uk'] } = {}) {
@@ -1393,4 +1393,51 @@ test('errorHandler: called when events are refused or dropped after retries, not
     mode = 400; sdk.track('b'); await sdk.flush();
     assert.equal(errors.length, 2); assert.equal(errors[1].status, 400);
   } finally { sdk.destroy(); }
+});
+
+test('click IDs: kept 90 days per network on the apex domain; read by getClickIds() and on a server', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-26T10:00:00Z').getTime() });
+  const { jar } = browser('https://www.studio.test/?gclid=EAIa&fbclid=IwAR&utm_source=x&li_fat_id=%3Cbad%3E');
+  const sdk = make({ publishableKey: 'mana_pk_click_ids' });
+  const name = clickIdsCookieName('mana_pk_click_ids');
+  try {
+    assert.match(name, /^mana_[0-9a-f]{8}_click-ids$/);
+    assert.deepEqual(sdk.getClickIds(), { gclid: 'EAIa', fbclid: 'IwAR', captured_at: '2026-11-26T10:00:00.000Z' }, 'an unsafe value is left out');
+    const write = jar.writes.find(raw => raw.startsWith(`${name}=%7B`));
+    assert.match(write, /max-age=7776000/); assert.match(write, /domain=\.studio\.test/);
+    // A server reads the raw cookie value from the Cookie header.
+    const raw = document.cookie.split('; ').find(part => part.startsWith(`${name}=`)).slice(name.length + 1);
+    assert.deepEqual(parseClickIds(raw), sdk.getClickIds());
+  } finally { sdk.destroy(); }
+  // A later click replaces its network only; a page without a click ID keeps the cookie.
+  t.mock.timers.tick(86400000);
+  globalThis.location = new URL('https://app.studio.test/signup?gclid=NEW');
+  const later = make({ publishableKey: 'mana_pk_click_ids' });
+  try { assert.deepEqual(later.getClickIds(), { gclid: 'NEW', fbclid: 'IwAR', captured_at: '2026-11-27T10:00:00.000Z' }, 'shared across subdomains'); } finally { later.destroy(); }
+  globalThis.location = new URL('https://app.studio.test/home');
+  const plain = make({ publishableKey: 'mana_pk_click_ids' });
+  try {
+    assert.equal(plain.getClickIds().gclid, 'NEW');
+    plain.optOut();
+    assert.equal(plain.getClickIds(), undefined);
+    assert.equal(jar.read(name), undefined, 'optOut() deletes the cookie');
+  } finally { plain.destroy(); }
+});
+
+test('click IDs: nothing stored before consent or for an excluded parameter; bad server values give undefined', () => {
+  const { jar } = browser('https://consent-clicks.test/?gclid=G1&msclkid=M1');
+  const consent = make({ publishableKey: 'mana_pk_click_consent', requireConsent: true, tracking: { excludeQueryParams: ['msclkid'] } });
+  const name = clickIdsCookieName('mana_pk_click_consent');
+  try {
+    assert.equal(consent.getClickIds(), undefined);
+    assert.equal(jar.read(name), undefined, 'no cookie before consent');
+    consent.setConsent(true);
+    assert.deepEqual(consent.getClickIds(), { gclid: 'G1', captured_at: consent.getClickIds().captured_at }, 'msclkid is excluded');
+    consent.setConsent(false);
+    assert.equal(jar.read(name), undefined, 'withdrawn consent deletes it');
+  } finally { consent.destroy(); }
+  for (const bad of [undefined, '', 'x', '%7B', '[]', '{"gclid":"g"}', '{"captured_at":"2026-11-26T10:00:00.000Z"}', '{"gclid":"<x>","captured_at":"2026-11-26T10:00:00.000Z"}', 'a'.repeat(5000)]) {
+    assert.equal(parseClickIds(bad), undefined, String(bad).slice(0, 20));
+  }
+  assert.deepEqual(parseClickIds('{"gclid":"g","evil":"x","captured_at":"2026-11-26T10:00:00.000Z"}'), { gclid: 'g', captured_at: '2026-11-26T10:00:00.000Z' });
 });

@@ -1,7 +1,8 @@
 import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
-import { storageKey } from './storage';
+import { getCookie, identityCookieDomain, removeCookie, setCookie, storageKey } from './storage';
+import { CLICK_IDS_MAX_AGE_SECONDS, nextClickIds, parseClickIds, type ClickIds } from './click-ids';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
 import { Logger } from './logger';
 import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
@@ -114,7 +115,7 @@ export class Analytics {
   private deferredIdentify?: Traits;
   /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
-  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
+  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string; clickIds: string };
   private acquisition?: AnalyticsEvent['context'];
   private acquisitionDay?: string;
   private readonly logger: Logger;
@@ -186,7 +187,7 @@ export class Analytics {
       maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };
     const key = (name: string) => storageKey(this.options.publishableKey, name);
-    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
+    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out'), clickIds: key('click-ids') };
     this.start();
     if (options.ready) {
       try { options.ready(this); } catch (error) { console.error('[Manalens] Error in the ready callback:', error); }
@@ -337,6 +338,7 @@ export class Analytics {
   }
 
   private clearIdentityStorage(): void {
+    removeCookie(this.keys.clickIds);
     clearUserId(this.keys.userId);
     clearAnonymousId(this.keys.anonymousId);
     clearSessionId(this.keys.sessionId);
@@ -405,6 +407,29 @@ export class Analytics {
     // Create the persistent ID on first load, before any event is queued.
     generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
     this.userId ||= readUserId(this.keys.userId);
+    this.rememberClickIds();
+  }
+
+  /** Save the ad click IDs of the current URL (click-ids.ts). Same rules as the anonymous ID. */
+  private rememberClickIds(): void {
+    let url: URL;
+    try { url = new URL(location.href); } catch { return; }
+    const value = nextClickIds(url, getCookie(this.keys.clickIds), this.options.tracking?.excludeQueryParams);
+    if (!value) return;
+    const domain = identityCookieDomain(this.options.crossSubdomainCookies);
+    setCookie(this.keys.clickIds, value, { maxAge: CLICK_IDS_MAX_AGE_SECONDS, ...(domain ? { domain } : {}) });
+  }
+
+  /**
+   * The ad click IDs saved in this browser (the latest per network, for 90
+   * days), or undefined when there are none or the SDK keeps no identity
+   * (before consent, after optOut(), on an excluded page). Send them to your
+   * backend at sign-up or checkout, or read the cookie there
+   * (clickIdsCookieName, parseClickIds).
+   */
+  getClickIds(): ClickIds | undefined {
+    if (!this.active() || !this.identityAllowed() || this.pageExcluded()) return undefined;
+    return parseClickIds(getCookie(this.keys.clickIds));
   }
 
   private active(): boolean {
@@ -644,3 +669,5 @@ function stripIdentity(events: AnalyticsEvent[]): AnalyticsEvent[] {
 export function createAnalytics(options: AnalyticsOptions): Analytics {
   return new Analytics(options);
 }
+
+export { clickIdsCookieName, parseClickIds, CLICK_IDS_MAX_AGE_SECONDS, type ClickIds, type ClickIdKey } from './click-ids';
