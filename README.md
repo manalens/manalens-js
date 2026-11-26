@@ -376,6 +376,16 @@ For the standard game events (`game_open`, `session_start`, `session_end`,
 `error`, `app_unclean_exit`, `game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
 
+### Game portals (itch.io, CrazyGames)
+
+The collector accepts events from a page on your project domain, one of its
+subdomains, or a host in **Project settings > Allowed origins**. itch.io serves
+HTML5 builds from `html.itch.zone` and `html-classic.itch.zone`. A new project
+lists `*.itch.zone`, so an itch.io build works with no change. If you removed
+it, add `*.itch.zone` again (or click **Restore default**). For CrazyGames, add
+`*.crazygames.com`. A page on any other host gets `403`. See
+[Game portals](https://docs.manalens.dev/sdks/web#game-portals).
+
 ## Snippet attributes
 
 `data-publishable-key` and `data-endpoint` are required. The snippet shares identity across subdomains by default. Add
