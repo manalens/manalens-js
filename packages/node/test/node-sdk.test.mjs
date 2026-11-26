@@ -443,3 +443,115 @@ test('SDK_VERSION equals package.json version', () => {
   assert.equal(SDK_VERSION, pkg.version);
   assert.equal(pkg.name, LIBRARY.library_name);
 });
+
+test('traits: server mode sends a traits event with an anonymous ID or a user ID, protected traits included (P-2814)', async () => {
+  const { analytics, calls } = client(SECRET);
+  analytics.traits({ anonymousId: ANON, traits: { level: 3, email: 'ana@example.com' } });
+  analytics.traits({ userId: 'player_1', traits: { stripe_customer_id: 'cus_1', note: null } });
+  await analytics.flush();
+  const [anon, user] = calls[0].body.events;
+  assertCollectorAccepts(calls[0].body);
+  assert.equal(anon.type, 'traits');
+  assert.equal(anon.event, undefined);
+  assert.equal(anon.properties, undefined);
+  assert.deepEqual(anon.traits, { level: 3, email: 'ana@example.com' });
+  assert.equal(anon.anonymous_id, ANON);
+  assert.equal(anon.user_id, undefined);
+  assert.deepEqual(user.traits, { stripe_customer_id: 'cus_1', note: null });
+  assert.equal(user.user_id, 'player_1');
+});
+
+test('traits: app mode drops protected traits with one warning; invalid calls are dropped', async () => {
+  const warnings = [];
+  const { analytics, calls, logs } = client(PUBLISHABLE, { mode: 'app', app, anonymousId: ANON, debug: false, logger: m => warnings.push(m) });
+  analytics.traits({ traits: { email: 'ana@example.com', itch_user_id: '9', level: 3 } });
+  analytics.traits({ traits: { paddle_customer_id: 'ctm_1' } });
+  analytics.traits({ traits: {} });
+  analytics.traits({ traits: { bad: { nested: true } } });
+  analytics.traits({ event: 'x', traits: { level: 1 } });
+  await analytics.flush();
+  assert.equal(logs.length, 0);
+  assert.equal(calls.length, 1);
+  const events = calls[0].body.events;
+  assert.equal(events.length, 2, 'only the valid calls are sent');
+  assert.deepEqual(events[0].traits, { level: 3 });
+  assert.equal(events[0].anonymous_id, ANON);
+  assert.ok(events[0].session_id);
+  assert.equal(events[0].event, undefined);
+  assert.deepEqual(events[1].traits, { level: 1 });
+  assert.equal(events[1].event, undefined, 'a stray event field is not sent');
+  assert.equal(warnings.filter(message => message.includes('protected traits')).length, 1, 'one warning');
+  assert.ok(!JSON.stringify(calls).includes('ana@example.com'));
+});
+
+test('traits: server mode drops a call with neither userId nor anonymousId, or with no traits', async () => {
+  const { analytics, calls, logs } = client(SECRET);
+  analytics.traits({ traits: { level: 1 } });
+  analytics.traits({ userId: 'p', traits: {} });
+  analytics.traits({ userId: 'p' });
+  await analytics.flush();
+  assert.equal(calls.length, 0);
+  assert.equal(logs.filter(message => message.includes('dropped traits')).length, 3);
+});
+
+const TICKET = '140000000a0b0c0d0e0f101112131415161718191a1b1c1d';
+const linkResponse = (status, code, headers = {}) => new Response(status === 200 ? '{"linked":true,"provider":"steam"}' : JSON.stringify({ error: { code, message: 'no' } }), { status, headers });
+
+test('link: server mode posts the ticket with the secret key, the anonymous ID and the user ID to the API host (P-2815)', async () => {
+  const { analytics, calls } = client(SECRET, { endpoint: 'https://events.manalens.dev' }, [linkResponse(200)]);
+  const result = await analytics.link({ provider: 'steam', ticket: Buffer.from(TICKET, 'hex'), anonymousId: ANON, userId: 'player_1' });
+  assert.deepEqual(result, { linked: true, status: 200 });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, 'https://api.manalens.dev/v0/link');
+  assert.equal(calls[0].init.headers.authorization, `Bearer ${SECRET}`);
+  assert.equal(calls[0].init.headers['x-publishable-key'], undefined);
+  assert.deepEqual(calls[0].body, { provider: 'steam', ticket: TICKET, anonymous_id: ANON, user_id: 'player_1' });
+});
+
+test('link: app mode sends the publishable key and its own anonymous ID, never the user ID; apiEndpoint wins', async () => {
+  const { analytics, calls } = client(PUBLISHABLE, { mode: 'app', app, anonymousId: ANON, apiEndpoint: 'https://proxy.example.com/mana/' }, [linkResponse(200)]);
+  assert.deepEqual(await analytics.link({ provider: 'steam', ticket: TICKET.toUpperCase(), userId: 'player_1' }), { linked: true, status: 200 });
+  assert.equal(calls[0].url, 'https://proxy.example.com/mana/v0/link');
+  assert.equal(calls[0].init.headers['x-publishable-key'], PUBLISHABLE);
+  assert.equal(calls[0].init.headers.authorization, undefined);
+  assert.deepEqual(calls[0].body, { provider: 'steam', ticket: TICKET.toUpperCase(), anonymous_id: ANON });
+  // Another host (a local collector) serves both paths.
+  const local = client(PUBLISHABLE, { mode: 'app', app, endpoint: 'http://localhost:3001' }, [linkResponse(200)]);
+  await local.analytics.link({ provider: 'steam', ticket: TICKET });
+  assert.equal(local.calls[0].url, 'http://localhost:3001/v0/link');
+});
+
+test('link: 4xx and 5xx are not sent again; a 429 with Retry-After is tried once; a network error returns', async t => {
+  for (const [status, code] of [[400, 'STEAM_TICKET_INVALID'], [401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [409, 'STEAM_NOT_CONNECTED'], [502, 'STEAM_KEY_REFUSED'], [503, 'NOT_CONFIGURED']]) {
+    const { analytics, calls } = client(SECRET, {}, [linkResponse(status, code)]);
+    assert.deepEqual(await analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON }), { linked: false, status, code });
+    assert.equal(calls.length, 1, `${status} is sent once`);
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const limited = client(SECRET, {}, [linkResponse(429, 'RATE_LIMITED', { 'retry-after': '3' }), linkResponse(429, 'RATE_LIMITED', { 'retry-after': '3' })]);
+  const pending = limited.analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON });
+  await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(3000);
+  assert.deepEqual(await pending, { linked: false, status: 429, code: 'RATE_LIMITED' });
+  assert.equal(limited.calls.length, 2, 'one more try, then no loop');
+  t.mock.timers.reset();
+  const long = client(SECRET, {}, [linkResponse(429, 'RATE_LIMITED', { 'retry-after': '120' })]);
+  assert.equal((await long.analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON })).status, 429);
+  assert.equal(long.calls.length, 1, 'a Retry-After over 60 s is not waited for');
+  const offline = client(SECRET, {}, [new TypeError('fetch failed')]);
+  assert.deepEqual(await offline.analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON }), { linked: false, status: 0, code: 'NETWORK_ERROR' });
+  assert.equal(offline.calls.length, 1);
+});
+
+test('link: a bad call throws; after shutdown nothing is sent', async () => {
+  const { analytics, calls } = client(SECRET);
+  await assert.rejects(analytics.link({ provider: 'epic', ticket: TICKET, anonymousId: ANON }), /provider must be 'steam'/);
+  await assert.rejects(analytics.link({ provider: 'steam', ticket: 'abc', anonymousId: ANON }), /ticket must be hex/);
+  await assert.rejects(analytics.link({ provider: 'steam', ticket: `${TICKET}0`, anonymousId: ANON }), /ticket must be hex/);
+  await assert.rejects(analytics.link({ provider: 'steam', ticket: 'ab'.repeat(2049), anonymousId: ANON }), /ticket must be hex/);
+  await assert.rejects(analytics.link({ provider: 'steam', ticket: TICKET }), /anonymousId is required in server mode/);
+  await assert.rejects(analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: 'nope' }), /must be a UUID/);
+  await analytics.shutdown(10);
+  assert.deepEqual(await analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON }), { linked: false, status: 0, code: 'SHUT_DOWN' });
+  assert.equal(calls.length, 0);
+});

@@ -104,6 +104,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | --- | --- | --- |
 | `publishableKey` | required | The project publishable key (`mana_pk_...`). Safe to ship in a page or a game build. Any other value, such as a secret key (`mana_sk_`) or an API key (`mana_api_`), throws an error. Sent in the `x-publishable-key` header. |
 | `endpoint` | required | Collector base URL (origin, or a reverse proxy prefix such as `/mana`). The SDK posts to `<endpoint>/v0/events`. |
+| `apiEndpoint` | from `endpoint` | API base URL of `link()`. Default: the `endpoint` with an `events.` host changed to `api.` (`https://events.manalens.dev` gives `https://api.manalens.dev`). Other endpoints are used as they are. Snippet: `data-api-endpoint` |
 | `crossSubdomainCookies` | `true` | Apex-domain identity cookies; `false` for host-only |
 | `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `manalens:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
 | `batchSize` | `30` | Events per request (the collector takes at most 50) |
@@ -237,7 +238,7 @@ createAnalytics({
 ### Methods
 
 `page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
-`reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
+`traits(traits)`, `link({ provider: 'steam', ticket })`, `reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
 `getAnonymousId()`, `getSessionId()`, `flush(keepalive?)`, `destroy()`.
 
 ### Sessions
@@ -268,10 +269,10 @@ continued: the first event after the update starts a new session.
 ### Event envelope
 
 Each event in `POST /v0/events` (`{ events: [...] }`) has `type` (`page`,
-`track` or `identify`), `event` (track only), `message_id`,
+`track`, `identify` or `traits`), `event` (track only), `message_id`,
 `channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
 `anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
-(identify only). In consent mode before consent, `anonymous_id`, `session_id`
+(identify and traits only). In consent mode before consent, `anonymous_id`, `session_id`
 and `user_id` are absent.
 
 The API prefix is `/v0`. SDK builds before this change posted to `/v1/events`,
@@ -297,6 +298,52 @@ analytics.track('subscription_started');
 // On logout:
 analytics.reset();
 ```
+
+## Traits
+
+`traits()` sets traits on the player of this browser. It needs no user ID:
+before `identify()`, the traits belong to the anonymous ID of this browser;
+after it, to the user. It queues a `traits` event. A `null` value clears a
+trait.
+
+```ts
+analytics.traits({ level: 3, difficulty: 'hard', discord_id: '123456789012345678' });
+```
+
+- At most 50 keys and 2 KB as JSON. Values are strings, numbers, booleans or
+  `null`. A bad call throws.
+- The protected traits `email`, `itch_user_id`, `stripe_customer_id` and
+  `paddle_customer_id` are not sent: the collector drops them from web
+  events. The SDK prints one console warning. Set them from your server with
+  `@manalens/node` and the secret key.
+- Like `identify()`, it waits for consent and for an allowed page. Calls made
+  before then are merged and sent together.
+
+## Verify Steam ownership
+
+A browser or Electron game on Steam can link the player's Steam account with a
+Steam ticket. Manalens checks the ticket with Steam and reads which of your
+apps the account owns. The player does not sign in.
+
+Make the ticket with `GetAuthTicketForWebApi("manalens")` (the identity must be
+`manalens`), wait for the ticket callback, and pass the ticket bytes as hex:
+
+```ts
+const result = await analytics.link({ provider: 'steam', ticket: ticketHex });
+if (!result.linked) console.warn('Steam link failed', result.status, result.code);
+```
+
+- The SDK posts once to `<apiEndpoint>/v0/link` with the anonymous ID. A
+  refused ticket is not sent again. After a `429` with `Retry-After` (up to
+  60 s), it tries once more.
+- It returns `{ linked, status, code? }` and never throws for an HTTP or
+  network error. `code` is the API error code (for example
+  `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`) or `DISABLED`,
+  `CONSENT_REQUIRED`, `EXCLUDED` or `NETWORK_ERROR`.
+- A bad provider or ticket throws.
+
+See [Steam ownership](https://docs.manalens.dev/features/steam-ownership) and
+the [Link API](https://docs.manalens.dev/api/link).
 
 ## Opt-out
 
@@ -325,13 +372,14 @@ that shows a consent banner before analytics storage, should set
 - Until `setConsent(true)`, the SDK reads and writes no cookies or
   localStorage. Page and track events are still sent, with no
   `anonymous_id`, `session_id` or `user_id`.
-- An `identify()` call made before consent is held in memory and sent when
-  consent is granted.
+- An `identify()` or `traits()` call made before consent is held in memory and
+  sent when consent is granted. `link()` sends nothing before consent.
 - `setConsent(true)` creates or restores the persistent ID. Call it on each
   page load once your consent manager reports consent; the SDK does not store
   the consent choice.
 - `setConsent(false)` clears all identity storage, drops the user ID, removes
-  identity fields from queued events and discards queued identify events.
+  identity fields from queued events and discards queued identify and traits
+  events.
 
 ```ts
 const analytics = createAnalytics({ publishableKey, endpoint, requireConsent: true });
@@ -401,6 +449,7 @@ console logs. Add the `data-app-*` attributes for a browser game (see above).
 | --- | --- |
 | `data-publishable-key` | `publishableKey` (required) |
 | `data-endpoint` | `endpoint` (required) |
+| `data-api-endpoint` | `apiEndpoint` |
 | `data-cross-subdomain="false"` | `crossSubdomainCookies: false` |
 | `data-require-consent="true"` | `requireConsent: true` |
 | `data-auto-pageviews="false"` | `autoPageviews: false` |

@@ -6,7 +6,7 @@ export type Traits = Record<string, string | number | boolean | null>;
 
 /** The browser portion of Formo's event envelope. */
 export interface AnalyticsEvent {
-  type: 'page' | 'track' | 'identify';
+  type: 'page' | 'track' | 'identify' | 'traits';
   event?: string;
   message_id: string;
   channel: 'web';
@@ -39,7 +39,7 @@ export interface AnalyticsEvent {
   session_id?: string;
   /** Set by identify() and attached to every later event until reset(). */
   user_id?: string;
-  /** identify events only. */
+  /** identify and traits events only. */
   traits?: Traits;
 }
 
@@ -52,6 +52,13 @@ export interface AnalyticsOptions {
    */
   publishableKey: string;
   endpoint: string;
+  /**
+   * The Manalens API base URL for link(). Default: the endpoint with an
+   * `events.` host changed to `api.` (`https://events.manalens.dev` gives
+   * `https://api.manalens.dev`); any other endpoint (a proxy or a local
+   * collector) is used as it is.
+   */
+  apiEndpoint?: string;
   /**
    * Scope identity cookies to the apex domain (`.example.com`) so subdomains
    * such as app.example.com and example.com share one anonymous ID. Default true,
@@ -114,4 +121,24 @@ export interface AnalyticsOptions {
    * invalid object is dropped with a console warning.
    */
   app?: AppInfo;
+}
+
+/** The request of link(): a Steam ticket from `GetAuthTicketForWebApi("manalens")`, as hex. */
+export interface LinkRequest {
+  provider: 'steam';
+  /** The bytes of the ticket as a hex string: 32 to 4096 hex characters, an even number. */
+  ticket: string;
+}
+
+/**
+ * The result of link(). `linked` is true when Steam accepted the ticket.
+ * `status` is the HTTP status (0 when nothing was sent or the network
+ * failed). `code` is the error code of the API, such as
+ * `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`, or a code of the SDK:
+ * `DISABLED`, `CONSENT_REQUIRED`, `EXCLUDED` or `NETWORK_ERROR`.
+ */
+export interface LinkResult {
+  linked: boolean;
+  status: number;
+  code?: string;
 }

@@ -112,16 +112,17 @@ function checkTimestamp(value: string, mode: Mode, now: number): void {
 }
 
 function checkCommon(event: WireEvent, mode: Mode, now: number): void {
-  if (event.type !== 'track' && event.type !== 'identify') fail('type', 'must be track or identify');
+  if (event.type !== 'track' && event.type !== 'identify' && event.type !== 'traits') fail('type', 'must be track, identify or traits');
   if (!isUUID(event.message_id)) fail('messageId', 'must be a UUID');
   checkTimestamp(event.original_timestamp, mode, now);
   if (event.type === 'track') {
     if (!isNonEmptyString(event.event)) fail('event', 'is required for track');
     checkString('event', event.event, LIMITS.eventName, 1);
-    if (event.traits !== undefined) fail('traits', 'are only valid on identify');
+    if (event.traits !== undefined) fail('traits', 'are only valid on identify and traits');
   } else {
-    if (event.event !== undefined) fail('event', 'is not valid on identify');
-    if (event.user_id === undefined) fail('userId', 'is required for identify');
+    if (event.event !== undefined) fail('event', `is not valid on ${event.type}`);
+    if (event.type === 'identify' && event.user_id === undefined) fail('userId', 'is required for identify');
+    if (event.type === 'traits' && (!isObject(event.traits) || Object.keys(event.traits).length === 0)) fail('traits', 'needs at least one key');
   }
   if (event.user_id !== undefined) checkString('userId', event.user_id, LIMITS.userId, 1);
   if (event.anonymous_id !== undefined && !isUUID(event.anonymous_id)) fail('anonymousId', 'must be a UUID');

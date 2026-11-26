@@ -76,11 +76,49 @@ export interface IdentifyCall extends BaseCall {
   traits?: Properties;
 }
 
+/**
+ * A `traits` event (P-2814): traits of a player with or without a user ID.
+ * Without `userId`, they belong to the anonymous ID (one game install or
+ * browser). Server mode needs `userId` or `anonymousId`.
+ */
+export interface TraitsCall extends BaseCall {
+  /** Required: 1 to 50 keys. A `null` value clears a trait. */
+  traits: Properties;
+}
+
+/** link(): a Steam ticket from `GetAuthTicketForWebApi("manalens")` (P-2815). */
+export interface LinkCall {
+  provider: 'steam';
+  /** The ticket bytes as hex (Buffer or Uint8Array also work): 32 to 4096 hex characters, an even number. */
+  ticket: string | Uint8Array;
+  /** The anonymous ID of the game install that made the ticket. Required in server mode; app mode uses its own by default. */
+  anonymousId?: string;
+  /** Server mode only: your user ID, 1 to 255 characters. App mode never sends it (the API ignores it with the publishable key). */
+  userId?: string;
+}
+
+/**
+ * The result of link(). `linked` is true when Steam accepted the ticket.
+ * `status` is the HTTP status (0 when the request failed). `code` is the API
+ * error code, such as `STEAM_TICKET_INVALID`, or `NETWORK_ERROR` or `SHUT_DOWN`.
+ */
+export interface LinkResult {
+  linked: boolean;
+  status: number;
+  code?: string;
+}
+
 export type Logger = (message: string) => void;
 
 export interface AnalyticsOptions {
   /** Collector URL without `/v0/events`, for example `https://collect.example.com`. */
   endpoint: string;
+  /**
+   * API URL for link(). Default: the endpoint with an `events.` host changed
+   * to `api.` (`https://events.manalens.dev` gives `https://api.manalens.dev`).
+   * Any other endpoint is used as it is.
+   */
+  apiEndpoint?: string;
   /** Default `server`. */
   mode?: Mode;
   /** App info for every event. Required in app mode, optional in server mode. */
@@ -115,7 +153,7 @@ export interface AnalyticsOptions {
 
 /** The event envelope sent to `POST /v0/events`. */
 export interface WireEvent {
-  type: 'track' | 'identify';
+  type: 'track' | 'identify' | 'traits';
   channel: 'server' | 'app';
   message_id: string;
   original_timestamp: string;

@@ -5,7 +5,7 @@
  * @packageDocumentation
  */
 
-export { Manalens, SDK_VERSION } from './Manalens.js';
+export { Manalens, SDK_VERSION, PROTECTED_TRAITS } from './Manalens.js';
 export { ValidationError } from './validators/index.js';
 export { APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES } from './types/index.js';
 export type {
@@ -13,6 +13,9 @@ export type {
   AnalyticsOptions,
   TrackCall,
   IdentifyCall,
+  TraitsCall,
+  LinkCall,
+  LinkResult,
   AppInfo,
   ServerContext,
   AppContext,

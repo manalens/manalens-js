@@ -4,14 +4,14 @@ import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, genera
 import { storageKey } from './storage';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
 import { Logger } from './logger';
-import type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
+import type { AnalyticsEvent, AnalyticsOptions, LinkRequest, LinkResult, Traits } from './types';
 import { resolveAppInfo, type AppInfo } from './app';
 
 /** Sent as context.library_name / library_version, like Formo's Web SDK. Keep in sync with package.json. */
 export const LIBRARY_NAME = 'Manalens Web SDK';
 export const LIBRARY_VERSION = '0.1.1';
 
-export type { AnalyticsEvent, AnalyticsOptions, Traits } from './types';
+export type { AnalyticsEvent, AnalyticsOptions, LinkRequest, LinkResult, Traits } from './types';
 export type { TrackingOptions } from './tracking';
 export type { LoggerOptions, LogLevel } from './logger';
 export { logLevels } from './logger';
@@ -20,6 +20,28 @@ export { appPlatforms, appStorefronts, appEngines } from './app';
 
 /** The publishable key prefix; secret keys (`mana_sk_`) and API keys (`mana_api_`) never go in browser code. */
 const PUBLISHABLE_KEY_PREFIX = 'mana_pk_';
+
+/**
+ * Protected traits (P-2814): only a server with the secret key may set them.
+ * The collector drops them from web events, so traits() does not send them.
+ */
+export const PROTECTED_TRAITS: readonly string[] = ['email', 'itch_user_id', 'stripe_customer_id', 'paddle_customer_id'];
+/** A Steam ticket for link(): hex, 32 to 4096 characters, an even number. */
+const STEAM_TICKET = /^(?:[0-9a-fA-F]{2}){16,2048}$/;
+
+/**
+ * The API base URL of link(): the apiEndpoint option, or the endpoint with an
+ * `events.` host changed to `api.`. Other endpoints (a proxy, a local
+ * collector) serve both paths, so they are used as they are.
+ */
+function resolveApiEndpoint(options: Pick<AnalyticsOptions, 'endpoint' | 'apiEndpoint'>): string {
+  if (options.apiEndpoint) return options.apiEndpoint.replace(/\/$/, '');
+  try {
+    const url = new URL(options.endpoint);
+    if (url.hostname.startsWith('events.')) url.hostname = `api.${url.hostname.slice('events.'.length)}`;
+    return url.toString().replace(/\/$/, '');
+  } catch { return options.endpoint.replace(/\/$/, ''); }
+}
 
 /** The publishable key. Any value without the `mana_pk_` prefix is an error. */
 function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey'>): string {
@@ -112,6 +134,10 @@ export class Analytics {
   private consent?: boolean;
   /** identify() made before consent, sent when consent is granted. */
   private deferredIdentify?: Traits;
+  /** traits() made before consent or on an excluded page, merged, sent when identity is allowed. */
+  private deferredTraits?: Traits;
+  /** The protected-traits warning is printed once per instance. */
+  private warnedProtectedTraits = false;
   /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
@@ -296,6 +322,75 @@ export class Analytics {
   }
 
   /**
+   * Set traits on the player of this browser, with or without a user ID
+   * (P-2814). Sends a `traits` event: before identify() the traits belong to
+   * this browser's anonymous ID; after it, to the user. Protected traits
+   * (`email`, `itch_user_id`, `stripe_customer_id`, `paddle_customer_id`)
+   * are dropped with a console warning: only a server may set them. Like
+   * identify(), it waits for consent and for an allowed page. A `null` value
+   * clears a trait.
+   */
+  traits(traits: Traits): void {
+    if (!traits || typeof traits !== 'object' || Array.isArray(traits)) throw new Error('Traits must be an object');
+    const keys = Object.keys(traits);
+    if (!keys.length) throw new Error('Traits must have at least one key');
+    if (keys.length > 50) throw new Error('Traits must have at most 50 keys');
+    if (JSON.stringify(traits).length > 2048) throw new Error('User traits must be under 2KB');
+    if (!this.active()) return;
+    const kept: Traits = {};
+    const dropped: string[] = [];
+    for (const key of keys) {
+      if (PROTECTED_TRAITS.includes(key)) dropped.push(key);
+      else kept[key] = traits[key];
+    }
+    if (dropped.length && !this.warnedProtectedTraits && typeof console !== 'undefined') {
+      this.warnedProtectedTraits = true;
+      console.warn(`[Manalens] traits(): ${dropped.join(', ')} not sent. Only a server with the secret key can set protected traits.`);
+    }
+    if (!Object.keys(kept).length) return;
+    if (!this.identityAllowed() || this.pageExcluded()) { this.deferredTraits = { ...this.deferredTraits, ...kept }; return; }
+    this.enqueue('traits', undefined, {}, undefined, undefined, kept);
+  }
+
+  /**
+   * Link the Steam account of this player with a Steam ticket (P-2815).
+   * Make the ticket with `GetAuthTicketForWebApi("manalens")` and pass its
+   * bytes as hex. The SDK posts it once to `<apiEndpoint>/v0/link` with the
+   * anonymous ID. It never retries a refusal; after a 429 with Retry-After
+   * (at most 60 s) it tries once more. It sends nothing before consent, on an
+   * excluded page or after optOut(). Never throws for an HTTP or network error:
+   * read the result.
+   */
+  async link(request: LinkRequest): Promise<LinkResult> {
+    if (!request || request.provider !== 'steam') throw new Error("link: provider must be 'steam'");
+    if (typeof request.ticket !== 'string' || !STEAM_TICKET.test(request.ticket)) throw new Error('link: ticket must be hex, 32 to 4096 characters, an even number');
+    if (!this.active()) return { linked: false, status: 0, code: 'DISABLED' };
+    if (!this.identityAllowed()) return { linked: false, status: 0, code: 'CONSENT_REQUIRED' };
+    if (this.pageExcluded()) return { linked: false, status: 0, code: 'EXCLUDED' };
+    const body = JSON.stringify({ provider: 'steam', ticket: request.ticket, anonymous_id: generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) });
+    const url = `${resolveApiEndpoint(this.options)}/v0/link`;
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+      try {
+        response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-publishable-key': this.options.publishableKey }, body, credentials: 'omit' });
+      } catch {
+        this.logger.log('warn', 'link: network error');
+        return { linked: false, status: 0, code: 'NETWORK_ERROR' };
+      }
+      if (response.ok) { this.logger.log('info', 'link: Steam account linked'); return { linked: true, status: response.status }; }
+      const retryAfter = Number(response.headers?.get?.('retry-after'));
+      if (response.status === 429 && attempt === 0 && Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= MAX_RETRY_AFTER_MS / 1000) {
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        if (!this.active()) return { linked: false, status: 0, code: 'DISABLED' };
+        continue;
+      }
+      const reason = await refusalReason(response);
+      this.logger.log('warn', `link: HTTP ${response.status}${reason.text ? ` ${reason.text}` : ''}`);
+      return { linked: false, status: response.status, ...(reason.codes[0] ? { code: reason.codes[0] } : {}) };
+    }
+  }
+
+  /**
    * Consent mode (`requireConsent: true`): `setConsent(true)` starts the
    * persistent identity; `setConsent(false)` clears all identity storage and
    * strips identity from queued events. Events without consent carry no
@@ -308,19 +403,21 @@ export class Analytics {
     if (granted) {
       this.loadIdentity();
       this.sendHandoff();
+      // On an excluded page, keep the identify and the traits until the visitor reaches an allowed page.
+      if (this.pageExcluded()) return;
       const traits = this.deferredIdentify;
       this.deferredIdentify = undefined;
-      // On an excluded page, keep the identify until the visitor reaches an allowed page.
-      if (traits && this.pageExcluded()) { this.deferredIdentify = traits; return; }
       if (traits && this.userId && this.active()) {
         writeUserId(this.keys.userId, this.userId, this.options.crossSubdomainCookies);
         this.enqueue('identify', undefined, {}, undefined, undefined, traits);
       }
+      this.sendHeldTraits();
       return;
     }
     this.clearIdentityStorage();
     this.userId = undefined;
     this.deferredIdentify = undefined;
+    this.deferredTraits = undefined;
     this.handoff = undefined;
     this.pending = stripIdentity(this.pending);
   }
@@ -330,6 +427,7 @@ export class Analytics {
     this.identityGeneration++;
     this.userId = undefined;
     this.deferredIdentify = undefined;
+    this.deferredTraits = undefined;
     this.handoff = undefined;
     // Deletion needs no consent, so storage is cleared in every mode.
     if (typeof window === 'undefined' || this.options.disabled) return;
@@ -362,6 +460,7 @@ export class Analytics {
     // Start clean: nothing from before or during the opt-out is attached to new events.
     this.userId = undefined;
     this.deferredIdentify = undefined;
+    this.deferredTraits = undefined;
     if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
     if (this.identityAllowed() && !this.timezoneExcluded && !this.pageExcluded()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
@@ -394,6 +493,14 @@ export class Analytics {
     this.handoff = undefined;
     if (handoff.source === this.getAnonymousId()) return;
     this.enqueue('track', HANDOFF_EVENT, { source_anonymous_id: handoff.source, handoff_at: handoff.at });
+  }
+
+  /** Send the traits held before consent or on an excluded page. */
+  private sendHeldTraits(): void {
+    const held = this.deferredTraits;
+    if (!held || !this.active() || !this.identityAllowed() || this.pageExcluded()) return;
+    this.deferredTraits = undefined;
+    this.enqueue('traits', undefined, {}, undefined, undefined, held);
   }
 
   private identityAllowed(): boolean {
@@ -439,6 +546,8 @@ export class Analytics {
       writeUserId(this.keys.userId, this.userId, this.options.crossSubdomainCookies);
       this.enqueue('identify', undefined, {}, undefined, undefined, held);
     }
+    // Traits held the same way go out next.
+    if (type !== 'identify' && type !== 'traits') this.sendHeldTraits();
     const cross = this.options.crossSubdomainCookies;
     const payload: AnalyticsEvent = {
       type,
@@ -454,7 +563,7 @@ export class Analytics {
         session_id: touchSessionId(this.keys.sessionId, cross),
         ...(this.userId ? { user_id: this.userId } : {}),
       } : {}),
-      ...(type === 'identify' ? { traits } : {}),
+      ...(type === 'identify' || type === 'traits' ? { traits } : {}),
     };
     this.pending.push(payload);
     this.logger.log('debug', `Queued ${type}${event ? ` ${event}` : ''}`);
@@ -634,10 +743,10 @@ function installHistoryHooksOnce(): void {
   }
 }
 
-/** Remove identity fields and drop identify events. */
+/** Remove identity fields and drop identify and traits events (a traits event needs an identity). */
 function stripIdentity(events: AnalyticsEvent[]): AnalyticsEvent[] {
   return events
-    .filter(event => event.type !== 'identify')
+    .filter(event => event.type !== 'identify' && event.type !== 'traits')
     .map(({ anonymous_id: _a, session_id: _s, user_id: _u, ...event }) => event);
 }
 

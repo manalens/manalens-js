@@ -15,6 +15,16 @@ export function compact<T extends Record<string, unknown>>(value: T): T {
 }
 
 /**
+ * API URL for `/v0/link`: the apiEndpoint option, or the endpoint with an
+ * `events.` host changed to `api.` (other hosts serve both paths).
+ */
+export function linkUrl(endpoint: string, apiEndpoint?: string): string {
+  const base = new URL(eventsUrl(apiEndpoint ?? endpoint).replace(/\/v0\/events$/, ''));
+  if (!apiEndpoint && base.hostname.startsWith('events.')) base.hostname = `api.${base.hostname.slice('events.'.length)}`;
+  return `${base.toString().replace(/\/+$/, '')}/v0/link`;
+}
+
+/**
  * Collector URL for `/v0/events`. Accepts the base URL with or without a
  * trailing slash or `/v0/events`.
  */

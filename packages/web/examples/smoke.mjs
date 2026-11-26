@@ -1394,3 +1394,182 @@ test('errorHandler: called when events are refused or dropped after retries, not
     assert.equal(errors.length, 2); assert.equal(errors[1].status, 400);
   } finally { sdk.destroy(); }
 });
+
+test('traits(): a traits event with the anonymous ID and no user ID; the user ID after identify() (P-2814)', async t => {
+  browser('https://example.com/play');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = make({ publishableKey: 'mana_pk_traits' });
+  try {
+    sdk.traits({ level: 3, difficulty: 'hard', note: null });
+    await sdk.flush();
+    const [anon] = eventsOf(sent);
+    assert.equal(anon.type, 'traits');
+    assert.equal(anon.event, undefined);
+    assert.equal(anon.channel, 'web');
+    assert.deepEqual(anon.properties, {});
+    assert.deepEqual(anon.traits, { level: 3, difficulty: 'hard', note: null });
+    assert.match(anon.anonymous_id, uuid);
+    assert.match(anon.session_id, uuid);
+    assert.equal(anon.user_id, undefined);
+    await sdk.identify('user_t');
+    sdk.traits({ level: 4 });
+    sdk.track('after');
+    await sdk.flush();
+    const user = eventsOf(sent).find(event => event.type === 'traits' && event.traits.level === 4);
+    assert.equal(user.user_id, 'user_t');
+    assert.equal(user.anonymous_id, anon.anonymous_id);
+    assert.equal(eventsOf(sent).at(-1).traits, undefined, 'a track event has no traits');
+  } finally { sdk.destroy(); }
+});
+
+test('traits(): protected traits are dropped with one console warning; bad input throws', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const warnings = []; t.mock.method(console, 'warn', message => warnings.push(message));
+  const sdk = make({ publishableKey: 'mana_pk_traits' });
+  try {
+    sdk.traits({ email: 'person@example.com', itch_user_id: '1', plan: 'pro' });
+    sdk.traits({ stripe_customer_id: 'cus_1', paddle_customer_id: 'ctm_1' });
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.equal(events.length, 1, 'a call with only protected traits sends nothing');
+    assert.deepEqual(events[0].traits, { plan: 'pro' });
+    assert.ok(!JSON.stringify(sent).includes('person@example.com'));
+    assert.equal(warnings.length, 1, 'one warning per instance');
+    assert.match(warnings[0], /email, itch_user_id not sent/);
+    assert.throws(() => sdk.traits({}), /at least one key/);
+    assert.throws(() => sdk.traits(null), /must be an object/);
+    assert.throws(() => sdk.traits(['a']), /must be an object/);
+    assert.throws(() => sdk.traits(Object.fromEntries(Array.from({ length: 51 }, (_, i) => [`k${i}`, 1]))), /at most 50 keys/);
+    assert.throws(() => sdk.traits({ bio: 'x'.repeat(2100) }), /under 2KB/);
+  } finally { sdk.destroy(); }
+});
+
+test('traits(): waits for consent, merges held calls, and setConsent(false) drops them and queued traits events', async t => {
+  const { jar } = browser('https://consent.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = make({ publishableKey: 'mana_pk_consent', requireConsent: true });
+  try {
+    sdk.traits({ level: 1, mode: 'easy' });
+    sdk.traits({ level: 2 });
+    sdk.track('before');
+    await sdk.flush();
+    assert.equal(jar.writes.length, 0);
+    assert.deepEqual(eventsOf(sent).map(event => event.type), ['track'], 'traits wait for consent');
+    sdk.setConsent(true);
+    await sdk.flush();
+    const held = eventsOf(sent).at(-1);
+    assert.equal(held.type, 'traits');
+    assert.deepEqual(held.traits, { level: 2, mode: 'easy' });
+    assert.match(held.anonymous_id, uuid);
+    // Withdrawn consent: a queued traits event is discarded, and a held one is forgotten.
+    sdk.traits({ level: 3 });
+    sdk.setConsent(false);
+    sdk.traits({ level: 4 });
+    sdk.track('later');
+    await sdk.flush();
+    assert.deepEqual(eventsOf(sent).slice(-1).map(event => event.type), ['track']);
+    sdk.setConsent(true);
+    sdk.track('again');
+    await sdk.flush();
+    const traits = eventsOf(sent).filter(event => event.type === 'traits').map(event => event.traits.level);
+    assert.deepEqual(traits, [2, 4], 'the queued level 3 is discarded; level 4 waits for consent again');
+  } finally { sdk.destroy(); }
+});
+
+test('traits(): on an excluded page they are held and sent on the next allowed page; opted out is a no-op', async t => {
+  const { window } = browser('https://example.com/admin');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, tracking: { excludePaths: ['/admin'] } });
+  try {
+    sdk.traits({ level: 5 });
+    globalThis.location = new URL('https://example.com/home'); window.dispatchEvent(new Event('manalens:navigate'));
+    await sdk.flush();
+    assert.deepEqual(eventsOf(sent).map(event => event.type), ['traits', 'page']);
+    sdk.optOut();
+    sdk.traits({ level: 6 });
+    sdk.optIn();
+    sdk.track('back');
+    await sdk.flush();
+    assert.equal(eventsOf(sent).filter(event => event.type === 'traits').length, 1);
+  } finally { sdk.destroy(); }
+});
+
+const linkTicket = '140000000a0b0c0d0e0f101112131415161718191a1b1c1d';
+test('link(): posts the Steam ticket and the anonymous ID to the API host (P-2815)', async t => {
+  browser('https://example.com/');
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, init) => { calls.push({ url, init }); return { ...response(200), text: async () => '{"linked":true,"provider":"steam"}' }; });
+  const sdk = make({ publishableKey: 'mana_pk_link', endpoint: 'https://events.manalens.dev' });
+  try {
+    const result = await sdk.link({ provider: 'steam', ticket: linkTicket });
+    assert.deepEqual(result, { linked: true, status: 200 });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://api.manalens.dev/v0/link');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.credentials, 'omit');
+    assert.equal(calls[0].init.headers['x-publishable-key'], 'mana_pk_link');
+    assert.deepEqual(JSON.parse(calls[0].init.body), { provider: 'steam', ticket: linkTicket, anonymous_id: sdk.getAnonymousId() });
+    // A proxy or a local collector serves both paths; apiEndpoint wins.
+    for (const [options, url] of [[{ endpoint: 'http://localhost:3001/' }, 'http://localhost:3001/v0/link'], [{ endpoint: 'https://events.manalens.dev', apiEndpoint: 'https://example.com/mana/' }, 'https://example.com/mana/v0/link']]) {
+      const other = make({ publishableKey: 'mana_pk_link', ...options });
+      await other.link({ provider: 'steam', ticket: linkTicket });
+      other.destroy();
+      assert.equal(calls.at(-1).url, url);
+    }
+  } finally { sdk.destroy(); }
+});
+
+test('link(): a 4xx is not sent again; a 429 with Retry-After is tried once more; a network error returns', async t => {
+  browser('https://example.com/');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const statuses = [];
+  let calls = 0;
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++;
+    const next = statuses.shift();
+    if (next === 'offline') throw new TypeError('Failed to fetch');
+    const [status, code, headers] = next;
+    return { ...response(status, headers), text: async () => JSON.stringify({ error: { code, message: 'no' } }) };
+  });
+  const sdk = make({ publishableKey: 'mana_pk_link' });
+  try {
+    for (const [status, code] of [[400, 'STEAM_TICKET_INVALID'], [401, 'UNAUTHORIZED'], [403, 'FORBIDDEN'], [409, 'STEAM_NOT_CONNECTED'], [502, 'STEAM_UNAVAILABLE'], [503, 'NOT_CONFIGURED']]) {
+      calls = 0; statuses.push([status, code]);
+      assert.deepEqual(await sdk.link({ provider: 'steam', ticket: linkTicket }), { linked: false, status, code });
+      assert.equal(calls, 1, `${status} is not sent again`);
+    }
+    calls = 0; statuses.push([429, 'RATE_LIMITED', { 'retry-after': '2' }], [429, 'RATE_LIMITED', { 'retry-after': '2' }]);
+    const limited = sdk.link({ provider: 'steam', ticket: linkTicket });
+    await new Promise(resolve => setImmediate(resolve));
+    t.mock.timers.tick(2000);
+    assert.deepEqual(await limited, { linked: false, status: 429, code: 'RATE_LIMITED' });
+    assert.equal(calls, 2, 'one more try after Retry-After, then no loop');
+    calls = 0; statuses.push([429, 'RATE_LIMITED', { 'retry-after': '600' }]);
+    assert.deepEqual(await sdk.link({ provider: 'steam', ticket: linkTicket }), { linked: false, status: 429, code: 'RATE_LIMITED' });
+    assert.equal(calls, 1, 'a Retry-After over 60 s is not waited for');
+    calls = 0; statuses.push('offline');
+    assert.deepEqual(await sdk.link({ provider: 'steam', ticket: linkTicket }), { linked: false, status: 0, code: 'NETWORK_ERROR' });
+    assert.equal(calls, 1);
+  } finally { sdk.destroy(); }
+});
+
+test('link(): bad input throws; nothing is sent before consent, when disabled, or after optOut()', async t => {
+  browser('https://example.com/');
+  let calls = 0; t.mock.method(globalThis, 'fetch', async () => { calls++; return response(200); });
+  const consent = make({ publishableKey: 'mana_pk_link', requireConsent: true });
+  const disabled = make({ publishableKey: 'mana_pk_link', disabled: true });
+  const opted = make({ publishableKey: 'mana_pk_link' });
+  try {
+    await assert.rejects(consent.link({ provider: 'epic', ticket: linkTicket }), /provider must be 'steam'/);
+    await assert.rejects(consent.link({ provider: 'steam', ticket: 'abc' }), /ticket must be hex/);
+    await assert.rejects(consent.link({ provider: 'steam', ticket: `${linkTicket}a` }), /ticket must be hex/, 'odd length');
+    await assert.rejects(consent.link({ provider: 'steam', ticket: 'zz'.repeat(20) }), /ticket must be hex/);
+    await assert.rejects(consent.link({ provider: 'steam', ticket: 'ab'.repeat(2049) }), /ticket must be hex/, 'over 4096');
+    assert.deepEqual(await consent.link({ provider: 'steam', ticket: linkTicket.toUpperCase() }), { linked: false, status: 0, code: 'CONSENT_REQUIRED' });
+    assert.deepEqual(await disabled.link({ provider: 'steam', ticket: linkTicket }), { linked: false, status: 0, code: 'DISABLED' });
+    opted.optOut();
+    assert.deepEqual(await opted.link({ provider: 'steam', ticket: linkTicket }), { linked: false, status: 0, code: 'DISABLED' });
+    assert.equal(calls, 0);
+  } finally { consent.destroy(); disabled.destroy(); opted.destroy(); opted.optIn(); }
+});

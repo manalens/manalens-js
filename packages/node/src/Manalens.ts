@@ -1,8 +1,8 @@
 import { EventQueue } from './queue/index.js';
 import { ValidationError, checkApp, isUUID, validateAppEvent, validateServerEvent } from './validators/index.js';
-import { compact, eventsUrl, isoTimestamp, randomUUID } from './utils/index.js';
+import { compact, eventsUrl, isoTimestamp, linkUrl, randomUUID } from './utils/index.js';
 import { apiKeyPrefix, isWellFormedKey, publishableKeyPrefix, secretKeyPrefix } from './utils/keys.js';
-import type { AnalyticsOptions, AppContext, AppInfo, IdentifyCall, Logger, Mode, ServerContext, TrackCall, WireEvent } from './types/index.js';
+import type { AnalyticsOptions, AppContext, AppInfo, IdentifyCall, LinkCall, LinkResult, Logger, Mode, ServerContext, TraitsCall, TrackCall, WireEvent } from './types/index.js';
 
 /** Keep equal to package.json `version` (a unit test checks it). */
 export const SDK_VERSION = '0.1.1';
@@ -12,6 +12,15 @@ const SESSION_TIMEOUT_MS = 30 * 60_000;
 const SESSION_MAX_AGE_MS = 24 * 60 * 60_000;
 /** Collector batch limits on `POST /v0/events`. */
 const MAX_BATCH: Record<Mode, number> = { server: 100, app: 50 };
+/**
+ * Protected traits (P-2814): only the secret key may set them. The collector
+ * drops them from app events, so app mode does not send them.
+ */
+export const PROTECTED_TRAITS: readonly string[] = ['email', 'itch_user_id', 'stripe_customer_id', 'paddle_customer_id'];
+/** A Steam ticket for link(): hex, 32 to 4096 characters, an even number. */
+const STEAM_TICKET = /^(?:[0-9a-fA-F]{2}){16,2048}$/;
+/** link() waits for a 429 Retry-After of at most this many seconds, once. */
+const LINK_MAX_RETRY_AFTER_S = 60;
 
 /**
  * Check the key against the mode (the collector's key rules, see utils/keys.ts).
@@ -67,6 +76,12 @@ export class Manalens {
   private sessionStartedAt = 0;
   private fixedSession: boolean;
   private closed = false;
+  private readonly key: string;
+  private readonly linkUrl: string;
+  private readonly fetcher?: typeof fetch;
+  private readonly timeout: number;
+  private readonly warn: Logger;
+  private warnedProtectedTraits = false;
 
   constructor(key: string, options: AnalyticsOptions) {
     if (!options || typeof options !== 'object') throw new Error('options with endpoint are required');
@@ -74,7 +89,12 @@ export class Manalens {
     if (mode !== 'server' && mode !== 'app') throw new Error('mode must be "server" or "app"');
     checkKey(key, mode);
     this.mode = mode;
+    this.key = key;
+    this.linkUrl = linkUrl(options.endpoint, options.apiEndpoint);
+    this.fetcher = options.fetch;
+    this.timeout = options.timeout ?? 10_000;
     const logger: Logger = options.logger ?? (message => console.warn(message));
+    this.warn = message => logger(`[manalens] ${message}`);
     this.log = options.debug ? message => logger(`[manalens] ${message}`) : () => {};
 
     if (options.app !== undefined) {
@@ -118,6 +138,74 @@ export class Manalens {
     this.enqueue('identify', call);
   }
 
+  /**
+   * Set traits on a player, with or without a user ID (P-2814). Without
+   * `userId`, the traits belong to the anonymous ID. Server mode can set the
+   * protected traits (`email`, `itch_user_id`, `stripe_customer_id`,
+   * `paddle_customer_id`); app mode drops them with one warning, because the
+   * collector drops them from app events. Drops the event when it is invalid.
+   */
+  traits(call: TraitsCall): void {
+    if (this.mode === 'app' && call && typeof call === 'object' && call.traits && typeof call.traits === 'object') {
+      const dropped = Object.keys(call.traits).filter(key => PROTECTED_TRAITS.includes(key));
+      if (dropped.length) {
+        if (!this.warnedProtectedTraits) { this.warnedProtectedTraits = true; this.warn(`traits: ${dropped.join(', ')} not sent. In app mode the collector drops protected traits: set them in server mode with the secret key`); }
+        const traits = Object.fromEntries(Object.entries(call.traits).filter(([key]) => !PROTECTED_TRAITS.includes(key)));
+        if (!Object.keys(traits).length) { this.log('dropped traits: only protected traits'); return; }
+        call = { ...call, traits };
+      }
+    }
+    this.enqueue('traits', call);
+  }
+
+  /**
+   * Link the Steam account of a player with a Steam ticket (P-2815). The game
+   * makes the ticket with `GetAuthTicketForWebApi("manalens")`. Posts once to
+   * `<apiEndpoint>/v0/link`: a refusal (4xx, 5xx) is not sent again; a 429
+   * with Retry-After (at most 60 s) is tried once more. Server mode sends the
+   * secret key and may send `userId`; app mode sends the publishable key and
+   * its anonymous ID. Throws for a bad call; never throws for an HTTP or
+   * network error: read the result.
+   */
+  async link(call: LinkCall): Promise<LinkResult> {
+    if (!call || typeof call !== 'object' || call.provider !== 'steam') throw new Error("link: provider must be 'steam'");
+    const ticket = typeof call.ticket === 'string' ? call.ticket : call.ticket instanceof Uint8Array ? Buffer.from(call.ticket).toString('hex') : '';
+    if (!STEAM_TICKET.test(ticket)) throw new Error('link: ticket must be hex, 32 to 4096 characters, an even number');
+    const anonymousId = call.anonymousId ?? this.anonymousId;
+    if (anonymousId === undefined) throw new Error('link: anonymousId is required in server mode');
+    if (!isUUID(anonymousId)) throw new Error('link: anonymousId must be a UUID');
+    if (call.userId !== undefined && (typeof call.userId !== 'string' || call.userId.length < 1 || call.userId.length > 255)) throw new Error('link: userId must be 1 to 255 characters');
+    if (this.closed) return { linked: false, status: 0, code: 'SHUT_DOWN' };
+    const fetcher = this.fetcher ?? globalThis.fetch;
+    const body = JSON.stringify(compact({ provider: 'steam', ticket, anonymous_id: anonymousId, user_id: this.mode === 'server' ? call.userId : undefined }));
+    const headers: Record<string, string> = this.mode === 'server'
+      ? { 'content-type': 'application/json', authorization: `Bearer ${this.key}`, 'user-agent': `manalens-node/${SDK_VERSION}` }
+      : { 'content-type': 'application/json', 'x-publishable-key': this.key, 'user-agent': `manalens-node/${SDK_VERSION}` };
+    for (let attempt = 0; ; attempt++) {
+      let response: Response;
+      try {
+        response = await fetcher(this.linkUrl, { method: 'POST', headers, body, signal: AbortSignal.timeout(this.timeout) });
+      } catch (error) {
+        this.log(`link: request failed: ${(error as Error).message}`);
+        return { linked: false, status: 0, code: 'NETWORK_ERROR' };
+      }
+      if (response.ok) return { linked: true, status: response.status };
+      const retryAfter = Number(response.headers?.get?.('retry-after'));
+      if (response.status === 429 && attempt === 0 && Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= LINK_MAX_RETRY_AFTER_S) {
+        await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
+        if (this.closed) return { linked: false, status: 0, code: 'SHUT_DOWN' };
+        continue;
+      }
+      let code: string | undefined;
+      try {
+        const parsed = JSON.parse(await response.text()) as { error?: { code?: unknown } };
+        if (typeof parsed?.error?.code === 'string') code = parsed.error.code;
+      } catch { /* no JSON body */ }
+      this.log(`link: HTTP ${response.status}${code ? ` ${code}` : ''}`);
+      return { linked: false, status: response.status, ...(code ? { code } : {}) };
+    }
+  }
+
   /** App mode: the anonymous ID on events that do not set one. */
   getAnonymousId(): string | undefined {
     return this.anonymousId;
@@ -144,7 +232,7 @@ export class Manalens {
 
   /**
    * Send every queued event, for at most `timeoutMs` (default 5000), then
-   * stop the timers. Later track() and identify() calls are dropped.
+   * stop the timers. Later track(), identify() and traits() calls are dropped.
    */
   async shutdown(timeoutMs = 5000): Promise<void> {
     this.closed = true;
@@ -156,7 +244,7 @@ export class Manalens {
     this.queue.stop();
   }
 
-  private enqueue(type: 'track' | 'identify', call: TrackCall | IdentifyCall): void {
+  private enqueue(type: 'track' | 'identify' | 'traits', call: TrackCall | IdentifyCall | TraitsCall): void {
     if (this.closed) { this.log(`dropped ${type}: the client is shut down`); return; }
     try {
       const event = this.build(type, call);
@@ -169,7 +257,7 @@ export class Manalens {
     }
   }
 
-  private build(type: 'track' | 'identify', call: TrackCall | IdentifyCall): WireEvent {
+  private build(type: 'track' | 'identify' | 'traits', call: TrackCall | IdentifyCall | TraitsCall): WireEvent {
     if (!call || typeof call !== 'object') throw new ValidationError(type, 'needs an object argument');
     const now = Date.now();
     const timestamp = isoTimestamp(call.timestamp, now);
@@ -183,7 +271,7 @@ export class Manalens {
       user_id: call.userId,
       ...(type === 'track'
         ? { properties: (call as TrackCall).properties }
-        : { traits: (call as IdentifyCall).traits }),
+        : { traits: (call as IdentifyCall | TraitsCall).traits }),
     };
     if (this.mode === 'server') {
       const context = (call.context ?? {}) as ServerContext;

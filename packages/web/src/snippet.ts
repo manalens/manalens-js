@@ -14,6 +14,8 @@ if (typeof document !== 'undefined') {
     window.manalens = new Analytics({
       publishableKey,
       endpoint,
+      // data-api-endpoint: the API base URL of link(), when it is not the endpoint with events. changed to api.
+      ...(script?.dataset.apiEndpoint ? { apiEndpoint: script.dataset.apiEndpoint } : {}),
       crossSubdomainCookies: script?.dataset.crossSubdomain !== 'false',
       requireConsent: script?.dataset.requireConsent === 'true',
       // data-auto-pageviews="false": no automatic page views; call page() yourself.
