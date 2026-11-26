@@ -5,7 +5,7 @@ import { apiKeyPrefix, isWellFormedKey, publishableKeyPrefix, secretKeyPrefix } 
 import type { AnalyticsOptions, AppContext, AppInfo, IdentifyCall, Logger, Mode, ServerContext, TrackCall, WireEvent } from './types/index.js';
 
 /** Keep equal to package.json `version` (a unit test checks it). */
-export const SDK_VERSION = '0.1.0';
+export const SDK_VERSION = '0.1.1';
 export const LIBRARY_NAME = '@manalens/node';
 const SESSION_TIMEOUT_MS = 30 * 60_000;
 /** A session is never older than this: the collector's session rule does not use a client session of more than 24 hours. */
