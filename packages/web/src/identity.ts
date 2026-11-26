@@ -80,9 +80,19 @@ function storedSession(key: string, now: number): { id: string; startedAt: numbe
  * the anonymous ID.
  */
 export function touchSessionId(key: string, crossSubdomain: boolean, now = Date.now()): string {
+  return touchSession(key, crossSubdomain, now).id;
+}
+
+/** touchSessionId() with the session's start time (game mode measures `duration_s` from it). */
+export function touchSession(key: string, crossSubdomain: boolean, now = Date.now()): { id: string; startedAt: number } {
   const session = storedSession(key, now) ?? { id: crypto.randomUUID(), startedAt: now };
   persist(key, `${session.id}.${now}.${session.startedAt}`, SESSION_TIMEOUT_MS / 1000, crossSubdomain);
-  return session.id;
+  return session;
+}
+
+/** The stored session ID when it is still current, else undefined. Never starts one. */
+export function readSessionId(key: string, now = Date.now()): string | undefined {
+  return storedSession(key, now)?.id;
 }
 
 /**

@@ -1,7 +1,9 @@
 import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
-import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, readOptOut, readUserId, touchSessionId, writeOptOut, writeUserId } from './identity';
-import { storageKey } from './storage';
+import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
+import { readLocal, removeLocal, storageKey, writeLocal } from './storage';
+import { cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
+import { PersistentQueue } from './queue';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
 import { Logger } from './logger';
 import type { AnalyticsEvent, AnalyticsOptions, LinkRequest, LinkResult, Traits } from './types';
@@ -17,6 +19,8 @@ export type { LoggerOptions, LogLevel } from './logger';
 export { logLevels } from './logger';
 export type { AppInfo } from './app';
 export { appPlatforms, appStorefronts, appEngines } from './app';
+export type { TrackErrorOptions, ErrorSeverity } from './errors';
+export { errorSeverities, errorFingerprint } from './errors';
 
 /** The publishable key prefix; secret keys (`mana_sk_`) and API keys (`mana_api_`) never go in browser code. */
 const PUBLISHABLE_KEY_PREFIX = 'mana_pk_';
@@ -51,7 +55,7 @@ function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey'>
   return key;
 }
 
-type ResolvedOptions = Omit<AnalyticsOptions, 'tracking'> & { publishableKey: string; tracking?: TrackingOptions } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
+type ResolvedOptions = Omit<AnalyticsOptions, 'tracking' | 'game' | 'persistQueue'> & { publishableKey: string; tracking?: TrackingOptions } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
 /** Queue limits, as in getformo/sdk's EventQueue. */
 const MAX_QUEUE_BYTES = 500 * 1024;
@@ -140,13 +144,29 @@ export class Analytics {
   private warnedProtectedTraits = false;
   /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
-  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string };
+  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string; firstOpen: string };
+  /** Game mode (P-2800): game_open, sessions and errors. Only with a valid app option. */
+  private readonly game: boolean;
+  /** The persistent queue (G-2526), or undefined when it is off. */
+  private readonly persist?: PersistentQueue;
+  private persistLoaded = false;
+  /** The stored events being read on load; flush() waits for them. */
+  private restoring?: Promise<void>;
+  /** game_open was sent for this page load (and this identity). */
+  private gameOpened = false;
+  /** The game session of the last event: its ID, start and last activity (ms). */
+  private gameSession?: { id: string; startedAt: number; lastAt: number };
+  /** First open when localStorage is not available: page memory only. */
+  private firstOpenMemory?: string;
+  private readonly errorLimits = new ErrorLimiter();
+  private readonly onWindowError = (event: Event) => { try { this.captureWindowError(event as ErrorEvent); } catch { /* Never throw from the error handler. */ } };
+  private readonly onRejection = (event: Event) => { try { this.captureRejection(event as PromiseRejectionEvent); } catch { /* Never throw from the error handler. */ } };
   private acquisition?: AnalyticsEvent['context'];
   private acquisitionDay?: string;
   private readonly logger: Logger;
   /** A page view that waits for the framework to update the page; sent at once when the page hides. */
   private pendingPage?: { kind: 'popstate' | 'history'; timer: ReturnType<typeof setTimeout>; send: () => void };
-  private readonly onPageHide = () => { this.sendPendingPage(); void this.flush(true); };
+  private readonly onPageHide = () => { this.sendPendingPage(); this.endGameOnPageHide(); void this.flush(true); };
   private readonly onVisibilityChange = () => {
     if (document.visibilityState === 'hidden') { this.sendPendingPage(); void this.flush(true); }
   };
@@ -194,13 +214,19 @@ export class Analytics {
     const publishableKey = resolvePublishableKey(options);
     this.app = resolveAppInfo(options.app);
     this.logger = new Logger(options.logger);
+    // Game mode and the persistent queue need the app context: game events
+    // without context.app do not reach the game dashboards.
+    if (options.game === true && !this.app) console.warn('Manalens: the game option needs a valid app option. Game mode is off.');
+    this.game = options.game === true && !!this.app;
+    const persistQueue = options.persistQueue ?? this.game;
+    if (options.persistQueue === true && !this.app) console.warn('Manalens: the persistQueue option needs a valid app option. Events wait in memory only.');
     this.options = {
       autoPageviews: true,
       // Fewer, larger requests (2026-11-22): each request costs a queue write, read and ack on the
       // collector. 30 events stays under the collector's 50 and the 64 KB keepalive cap on pagehide;
       // pagehide and visibilitychange still send at once, so nothing waits when a player leaves.
       flushIntervalMs: 15000,
-      ...options,
+      ...withoutGameOptions(options),
       // tracking: false is the same as disabled: true (Formo's boolean form).
       disabled: options.disabled === true || options.tracking === false,
       tracking: typeof options.tracking === 'object' && options.tracking !== null ? options.tracking : undefined,
@@ -212,7 +238,8 @@ export class Analytics {
       maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };
     const key = (name: string) => storageKey(this.options.publishableKey, name);
-    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out') };
+    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out'), firstOpen: key('first-open') };
+    if (persistQueue === true && this.app) this.persist = new PersistentQueue(key('queue'));
     this.start();
     if (options.ready) {
       try { options.ready(this); } catch (error) { console.error('[Manalens] Error in the ready callback:', error); }
@@ -231,15 +258,22 @@ export class Analytics {
     // An excluded timezone is visitor-level: nothing is sent, nothing stored,
     // and an existing identity is deleted (deletion needs no consent).
     this.timezoneExcluded = timezoneExcluded(this.options.tracking?.excludeTimezones);
-    if (this.timezoneExcluded) { this.clearIdentityStorage(); this.handoff = undefined; this.logger.log('info', 'Excluded timezone: nothing is sent'); return; }
+    if (this.timezoneExcluded) { this.clearIdentityStorage(); void this.persist?.clear(); removeLocal(this.keys.firstOpen); this.handoff = undefined; this.logger.log('info', 'Excluded timezone: nothing is sent'); return; }
     // On an excluded host or path, no identity is written until an allowed page.
     if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation
     // (not from an excluded page, whose campaign would carry to later events).
     if (!this.pageExcluded()) this.captureContext();
-    this.timer = setInterval(() => { void this.flushDue(); }, this.options.flushIntervalMs);
+    this.timer = setInterval(() => { this.keepGameSessionAlive(); void this.flushDue(); }, this.options.flushIntervalMs);
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
+    // Stored events of an earlier load go first, then this load's events.
+    this.restorePersisted();
+    if (this.game) {
+      window.addEventListener('error', this.onWindowError);
+      window.addEventListener('unhandledrejection', this.onRejection);
+      this.startGame();
+    }
     this.sendHandoff();
     if (this.options.autoPageviews) {
       this.page();
@@ -249,7 +283,7 @@ export class Analytics {
       window.addEventListener('manalens:navigate', this.onNavigation);
       window.addEventListener(HISTORY_EVENT, this.onHistoryChange);
     }
-    this.logger.log('info', `Initialized (autoPageviews: ${this.options.autoPageviews}, consent required: ${this.options.requireConsent === true})`);
+    this.logger.log('info', `Initialized (autoPageviews: ${this.options.autoPageviews}, consent required: ${this.options.requireConsent === true}, game: ${this.game}, persistQueue: ${!!this.persist})`);
   }
 
   /**
@@ -410,6 +444,8 @@ export class Analytics {
     if (typeof window === 'undefined' || this.options.disabled) return;
     if (granted) {
       this.loadIdentity();
+      this.restorePersisted();
+      this.startGame();
       this.sendHandoff();
       // On an excluded page, keep the identify and the traits until the visitor reaches an allowed page.
       if (this.pageExcluded()) return;
@@ -428,10 +464,16 @@ export class Analytics {
     this.deferredTraits = undefined;
     this.handoff = undefined;
     this.pending = stripIdentity(this.pending);
+    // No consent: no stored events, no first open, no game session or error history.
+    this.forgetGameState();
   }
 
   /** Forget the user ID, anonymous ID and session. The next event starts a fresh identity. */
   reset(): void {
+    // Game mode: the old session ends first, with its identity and errors_dropped.
+    if (this.gameSession && this.active() && this.identityAllowed()) this.endGameSession(Date.now());
+    this.gameSession = undefined;
+    this.errorLimits.clear();
     this.identityGeneration++;
     this.userId = undefined;
     this.deferredIdentify = undefined;
@@ -454,6 +496,7 @@ export class Analytics {
     this.optOutGeneration++;
     this.pending = [];
     this.cancelPendingPage();
+    this.forgetGameState();
     this.reset();
     this.optedOut = true;
     this.logger.log('info', 'Opted out');
@@ -472,6 +515,8 @@ export class Analytics {
     if (typeof window === 'undefined' || this.options.disabled) return;
     writeOptOut(this.keys.optOut, false, this.options.crossSubdomainCookies);
     if (this.identityAllowed() && !this.timezoneExcluded && !this.pageExcluded()) generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies);
+    this.restorePersisted();
+    this.startGame();
   }
 
   isOptedOut(): boolean { return this.optedOut; }
@@ -556,8 +601,31 @@ export class Analytics {
     }
     // Traits held the same way go out next.
     if (type !== 'identify' && type !== 'traits') this.sendHeldTraits();
+    const at = Date.parse(originalTimestamp);
+    const identity = this.identityAllowed() ? this.identity(Number.isFinite(at) ? at : Date.now()) : undefined;
+    this.push(this.build(type, event, properties, originalTimestamp, identity, context, traits));
+  }
+
+  /** The identity of a new event. In game mode, a new session ID first ends the old game session and starts a new one. */
+  private identity(now: number): Pick<AnalyticsEvent, 'anonymous_id' | 'session_id' | 'user_id'> {
     const cross = this.options.crossSubdomainCookies;
-    const payload: AnalyticsEvent = {
+    const anonymousId = generateAnonymousId(this.keys.anonymousId, cross);
+    const session = touchSession(this.keys.sessionId, cross, now);
+    const ids = { anonymous_id: anonymousId, session_id: session.id, ...(this.userId ? { user_id: this.userId } : {}) };
+    if (this.game && this.gameOpened) {
+      if (this.gameSession?.id !== session.id) {
+        // The old session ended at its last activity (30 minutes idle, or 24 hours old).
+        if (this.gameSession) this.endGameSession(this.gameSession.lastAt, anonymousId);
+        this.gameSession = { id: session.id, startedAt: session.startedAt, lastAt: now };
+        this.errorLimits.newSession();
+        this.push(this.build('track', 'session_start', {}, new Date(now).toISOString(), ids));
+      } else this.gameSession.lastAt = now;
+    }
+    return ids;
+  }
+
+  private build(type: AnalyticsEvent['type'], event: string | undefined, properties: AnalyticsEvent['properties'], originalTimestamp: string, identity?: Pick<AnalyticsEvent, 'anonymous_id' | 'session_id' | 'user_id'>, context?: AnalyticsEvent['context'], traits?: Traits): AnalyticsEvent {
+    return {
       type,
       ...(event ? { event } : {}),
       message_id: crypto.randomUUID(),
@@ -566,17 +634,186 @@ export class Analytics {
       original_timestamp: originalTimestamp,
       context: { ...(context ?? this.captureContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION, ...(this.app ? { app: this.app } : {}) },
       properties,
-      ...(this.identityAllowed() ? {
-        anonymous_id: generateAnonymousId(this.keys.anonymousId, cross),
-        session_id: touchSessionId(this.keys.sessionId, cross),
-        ...(this.userId ? { user_id: this.userId } : {}),
-      } : {}),
+      ...(identity ?? {}),
       ...(type === 'identify' || type === 'traits' ? { traits } : {}),
     };
+  }
+
+  private push(payload: AnalyticsEvent): void {
     this.pending.push(payload);
-    this.logger.log('debug', `Queued ${type}${event ? ` ${event}` : ''}`);
+    if (this.persistAllowed()) { this.restorePersisted(); this.persist!.put([payload]); }
+    this.logger.log('debug', `Queued ${payload.type}${payload.event ? ` ${payload.event}` : ''}`);
     this.limitQueue();
     if (this.pending.length >= this.options.batchSize) void this.flushDue();
+  }
+
+  /** Ends the open game session with `session_end` (`duration_s`, and `errors_dropped` when errors were dropped). */
+  private endGameSession(at: number, anonymousId = generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies)): void {
+    const session = this.gameSession;
+    if (!session) return;
+    this.gameSession = undefined;
+    const properties: AnalyticsEvent['properties'] = { duration_s: Math.max(0, Math.round((at - session.startedAt) / 1000)) };
+    const dropped = this.errorLimits.takeDropped();
+    if (dropped > 0) properties.errors_dropped = dropped;
+    this.push(this.build('track', 'session_end', properties, new Date(at).toISOString(), { anonymous_id: anonymousId, session_id: session.id, ...(this.userId ? { user_id: this.userId } : {}) }));
+  }
+
+  /** pagehide: the game session ends now; the next event (also after a back-forward cache restore) starts a new one. */
+  private endGameOnPageHide(): void {
+    if (!this.game || !this.gameSession || !this.active() || !this.identityAllowed()) return;
+    this.endGameSession(Date.now());
+    clearSessionId(this.keys.sessionId);
+  }
+
+  /**
+   * While the game is visible and focused, the flush timer keeps the open
+   * session alive (as the game SDKs do while the game has focus). It never
+   * starts a new session: the next event does.
+   */
+  private keepGameSessionAlive(): void {
+    const session = this.gameSession;
+    if (!this.game || !session || !this.active() || !this.identityAllowed() || this.pageExcluded()) return;
+    if (typeof document === 'undefined' || document.visibilityState === 'hidden') return;
+    if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
+    const now = Date.now();
+    if (readSessionId(this.keys.sessionId, now) !== session.id) return;
+    touchSession(this.keys.sessionId, this.options.crossSubdomainCookies, now);
+    session.lastAt = now;
+  }
+
+  /**
+   * Game mode: once per load, when identity is allowed (after consent in
+   * consent mode), start a new session and send `game_open`. The first open
+   * is kept in this SDK's storage (key `first-open`).
+   */
+  private startGame(): void {
+    if (!this.game || this.gameOpened || !this.active() || !this.identityAllowed() || this.pageExcluded()) return;
+    this.gameOpened = true;
+    // Each start is a new session, as in the game SDKs.
+    clearSessionId(this.keys.sessionId);
+    this.gameSession = undefined;
+    const stored = this.readFirstOpen();
+    const firstOpenAt = stored ?? new Date().toISOString();
+    if (!stored) this.writeFirstOpen(firstOpenAt);
+    this.enqueue('track', 'game_open', { is_first_open: !stored, first_open_at: firstOpenAt });
+  }
+
+  private readFirstOpen(): string | undefined {
+    const valid = (value: string | undefined) => value && Number.isFinite(Date.parse(value)) ? value : undefined;
+    // `first_open_at` is the key of the hand-written setup snippet before game mode: a player who has it is not new.
+    return valid(readLocal(this.keys.firstOpen)) ?? valid(readLocal('first_open_at')) ?? this.firstOpenMemory;
+  }
+
+  private writeFirstOpen(value: string): void {
+    writeLocal(this.keys.firstOpen, value);
+    if (readLocal(this.keys.firstOpen) !== value) this.firstOpenMemory = value;
+  }
+
+  /** optOut() and setConsent(false): delete the stored events and the first open, and forget the game session and the error history. */
+  private forgetGameState(): void {
+    this.gameOpened = false;
+    this.gameSession = undefined;
+    this.firstOpenMemory = undefined;
+    this.errorLimits.clear();
+    this.persistLoaded = false;
+    this.restoring = undefined;
+    if (typeof window === 'undefined' || this.options.disabled) return;
+    removeLocal(this.keys.firstOpen);
+    void this.persist?.clear();
+  }
+
+  private persistAllowed(): boolean {
+    return !!this.persist && this.active() && this.identityAllowed();
+  }
+
+  /** Read the stored events once, when storage is allowed, and put them before the events of this load. */
+  private restorePersisted(): void {
+    if (!this.persist || this.persistLoaded || !this.persistAllowed()) return;
+    this.persistLoaded = true;
+    const optOutGeneration = this.optOutGeneration;
+    const restoring: Promise<void> = this.persist.load().then(events => {
+      if (this.restoring === restoring) this.restoring = undefined;
+      if (!this.active() || optOutGeneration !== this.optOutGeneration || !this.identityAllowed() || !this.persistLoaded) return;
+      const queued = new Set(this.pending.map(event => event.message_id));
+      const restored = events.filter(event => !queued.has(event.message_id));
+      if (!restored.length) return;
+      this.pending.unshift(...restored);
+      this.logger.log('info', `Restored ${restored.length} stored event(s)`);
+      this.limitQueue();
+      void this.flushDue();
+    });
+    this.restoring = restoring;
+  }
+
+  /**
+   * Send a handled error as an `error` event (source `manual`). An Error
+   * object gives the message, the error type (its name), the stack and the
+   * place in the code. Works in every mode; the error limits apply.
+   */
+  trackError(error: unknown, options: TrackErrorOptions = {}): void {
+    if (!this.active()) return;
+    const isError = errorLike(error);
+    const stack = options.stack ?? (isError && typeof error.stack === 'string' ? cleanMessage(error.stack) : '');
+    const frame = options.file || options.function ? undefined : firstFrame(isError && typeof error.stack === 'string' ? error.stack : undefined);
+    this.recordError({
+      message: isError ? error.message : typeof error === 'string' ? error : safeString(error),
+      severity: options.severity ?? 'error',
+      errorType: options.errorType ?? (isError && typeof error.name === 'string' ? error.name : ''),
+      handled: options.handled ?? true,
+      source: 'manual',
+      ...(options.fingerprint ? { fingerprint: options.fingerprint } : {}),
+      file: options.file ?? (frame ? cleanFile(frame.file) : ''),
+      line: options.line ?? frame?.line,
+      fn: options.function ?? frame?.fn ?? '',
+      stack,
+      properties: options.properties,
+    });
+  }
+
+  private recordError(input: ErrorInput): void {
+    const properties = errorProperties(input);
+    if (!this.errorLimits.allow(String(properties.fingerprint), input.source)) { this.logger.log('debug', 'Error dropped by the error limits'); return; }
+    this.enqueue('track', 'error', properties);
+  }
+
+  /** window `error`: an uncaught error. The message, stack and file lose personal data before they are queued. */
+  private captureWindowError(event: ErrorEvent): void {
+    if (!this.active()) return;
+    const error = event?.error as unknown;
+    const isError = errorLike(error);
+    const stack = isError && typeof error.stack === 'string' ? error.stack : '';
+    const frame = firstFrame(stack);
+    this.recordError({
+      message: cleanMessage(isError ? error.message : (typeof event?.message === 'string' && event.message) || 'Script error.'),
+      severity: 'error',
+      errorType: isError && typeof error.name === 'string' && error.name ? error.name : 'uncaught',
+      handled: false,
+      source: 'web_window',
+      file: cleanFile((typeof event?.filename === 'string' && event.filename) || frame?.file || ''),
+      line: (typeof event?.lineno === 'number' && event.lineno) || frame?.line,
+      fn: frame?.fn ?? '',
+      stack: cleanMessage(stack),
+    });
+  }
+
+  /** window `unhandledrejection`: a promise rejected with no handler. */
+  private captureRejection(event: PromiseRejectionEvent): void {
+    if (!this.active()) return;
+    const reason = event?.reason as unknown;
+    const isError = errorLike(reason);
+    const stack = isError && typeof reason.stack === 'string' ? reason.stack : '';
+    const frame = firstFrame(stack);
+    this.recordError({
+      message: cleanMessage(isError ? reason.message : typeof reason === 'string' ? reason : safeString(reason)),
+      severity: 'error',
+      errorType: isError && typeof reason.name === 'string' && reason.name ? reason.name : 'unhandledrejection',
+      handled: false,
+      source: 'web_window',
+      file: cleanFile(frame?.file ?? ''),
+      line: frame?.line,
+      fn: frame?.fn ?? '',
+      stack: cleanMessage(stack),
+    });
   }
 
   private size(event: AnalyticsEvent): number {
@@ -598,6 +835,7 @@ export class Analytics {
       this.logger.log('warn', `Queue over maxQueueSize: dropped the oldest event (${dropped.type})`);
       total -= this.size(dropped);
       this.attempts.delete(dropped.message_id);
+      this.persist?.remove([dropped.message_id]);
     }
   }
 
@@ -622,6 +860,8 @@ export class Analytics {
    * in memory (server errors at most retryCount times); other 4xx drop it.
    */
   async flush(keepalive = false): Promise<void> {
+    // Stored events of an earlier load go first: wait until they are read.
+    if (this.restoring) await this.restoring;
     if (!this.active() || this.pending.length === 0) return;
     const batch = this.pending.splice(0, this.options.batchSize);
     const generation = this.identityGeneration;
@@ -638,6 +878,8 @@ export class Analytics {
       if (response.ok || !retryableStatus(response.status)) {
         // Accepted, or refused for good (400, 401, 403, 413 ...): sending it again cannot help.
         for (const event of batch) this.attempts.delete(event.message_id);
+        // Only now does the stored copy go.
+        this.persist?.remove(batch.map(event => event.message_id));
         if (response.ok) {
           this.backoffStep = 0; this.retryAt = 0;
           // An accepted batch can still list refused events: they are dropped, not sent again.
@@ -654,7 +896,7 @@ export class Analytics {
       }
       retry = batch.filter(event => {
         const attempts = (this.attempts.get(event.message_id) ?? 0) + 1;
-        if (attempts > this.options.retryCount) { this.attempts.delete(event.message_id); return false; }
+        if (attempts > this.options.retryCount) { this.attempts.delete(event.message_id); this.persist?.remove([event.message_id]); return false; }
         this.attempts.set(event.message_id, attempts);
         return true;
       });
@@ -667,13 +909,21 @@ export class Analytics {
       this.logger.log('warn', `Network error: ${batch.length} event(s) wait in memory`);
       this.backOff();
     }
-    // Retry in memory only; the queue is never written to browser storage.
+    // Retry from memory. With persistQueue, the stored copy stays until the
+    // collector accepts the batch, so a closed tab sends it on the next load.
     // State may have changed while the request was in flight: drop the batch
     // after optOut()/destroy(); strip identity after reset(), setConsent(false)
     // or any other identity change, even if consent was granted again since.
     if (!this.active() || optOutGeneration !== this.optOutGeneration) { for (const event of batch) this.attempts.delete(event.message_id); return; }
     const stale = generation !== this.identityGeneration || !this.identityAllowed();
-    this.pending.unshift(...(stale ? stripIdentity(retry) : retry));
+    const again = stale ? stripIdentity(retry) : retry;
+    if (stale && this.persist) {
+      // The stored copies follow: without identity, and without identify events.
+      const kept = new Set(again.map(event => event.message_id));
+      this.persist.remove(retry.filter(event => !kept.has(event.message_id)).map(event => event.message_id));
+      if (this.persistAllowed()) this.persist.put(again);
+    }
+    this.pending.unshift(...again);
     this.limitQueue();
   }
 
@@ -695,6 +945,8 @@ export class Analytics {
       document.removeEventListener?.('visibilitychange', this.onVisibilityChange);
       window.removeEventListener('popstate', this.onPopState);
       window.removeEventListener('manalens:navigate', this.onNavigation);
+      window.removeEventListener('error', this.onWindowError);
+      window.removeEventListener('unhandledrejection', this.onRejection);
     }
     this.pending = [];
     this.attempts.clear();
@@ -749,6 +1001,23 @@ function installHistoryHooksOnce(): void {
       return result;
     };
   }
+}
+
+/** The options without game and persistQueue, which the constructor resolves itself. */
+function withoutGameOptions(options: AnalyticsOptions): Omit<AnalyticsOptions, 'game' | 'persistQueue'> {
+  const { game: _game, persistQueue: _persistQueue, ...rest } = options;
+  return rest;
+}
+
+/** An Error, or an object with a string message (errors from another realm). */
+function errorLike(value: unknown): value is { message: string; name?: unknown; stack?: unknown } {
+  return typeof value === 'object' && value !== null && typeof (value as { message?: unknown }).message === 'string';
+}
+
+/** A rejection reason that is not an Error, as text. */
+function safeString(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  try { return typeof value === 'object' ? JSON.stringify(value) ?? String(value) : String(value); } catch { return Object.prototype.toString.call(value); }
 }
 
 /** Remove identity fields and drop identify and traits events (a traits event needs an identity). */

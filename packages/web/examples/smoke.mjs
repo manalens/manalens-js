@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { webcrypto } from 'node:crypto';
 import vm from 'node:vm';
-import { Analytics } from '../dist/index.js';
+import { Analytics, errorFingerprint } from '../dist/index.js';
 
 /** Minimal document.cookie emulation: host-only and domain cookies, expiry, public-suffix rejection. */
 function cookieJar({ blocked = false, publicSuffixes = ['com', 'test', 'co.uk'] } = {}) {
@@ -1596,4 +1596,445 @@ test('link(): consent withdrawn, reset(), optOut() or an excluded page during th
       assert.equal(calls, 1, `${name}: no second request`);
     } finally { sdk.destroy(); sdk.optIn(); }
   }
+});
+
+// P-2800: game mode (game_open, sessions, errors) and trackError().
+// G-2526: the persistent queue (IndexedDB, else localStorage).
+const gameOptions = (extra = {}) => ({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: gameApp, game: true, ...extra });
+const named = (events, name) => events.filter(event => event.event === name);
+const tracked = events => events.map(event => event.event ?? event.type);
+const settle = sdk => sdk.persist?.settled() ?? Promise.resolve();
+const hex16 = /^[0-9a-f]{16}$/;
+const windowError = (fields) => Object.assign(new Event('error'), fields);
+const rejection = reason => Object.assign(new Event('unhandledrejection'), { reason });
+
+/** A small IndexedDB stand-in: one object store per database, keyPath `id`, put / delete / clear / getAll. */
+function fakeIndexedDB() {
+  const dbs = new Map();
+  const transaction = store => {
+    const tx = { objectStore: () => ({
+      put: value => { store.set(value.id, structuredClone(value)); },
+      delete: id => { store.delete(id); },
+      clear: () => { store.clear(); },
+      getAll: () => { const req = {}; queueMicrotask(() => { req.result = [...store.values()].map(value => structuredClone(value)); req.onsuccess?.(); }); return req; },
+    }) };
+    queueMicrotask(() => queueMicrotask(() => tx.oncomplete?.()));
+    return tx;
+  };
+  return {
+    dbs,
+    open(name) {
+      const req = {};
+      queueMicrotask(() => {
+        let stores = dbs.get(name); const fresh = !stores;
+        if (!stores) { stores = new Map(); dbs.set(name, stores); }
+        req.result = { objectStoreNames: { contains: n => stores.has(n) }, createObjectStore: n => { stores.set(n, new Map()); }, transaction: n => transaction(stores.get(n)) };
+        if (fresh) req.onupgradeneeded?.();
+        req.onsuccess?.();
+      });
+      return req;
+    },
+  };
+}
+
+test('game mode: session_start and game_open on each start; the first open is kept in the SDK storage', async t => {
+  const jar = cookieJar(); const local = memoryStorage();
+  browser('https://game.example/play', { jar, local });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    await sdk.flush();
+    const [start, open] = eventsOf(sent);
+    assert.deepEqual(tracked(eventsOf(sent)), ['session_start', 'game_open']);
+    assert.deepEqual(start.properties, {});
+    assert.equal(open.properties.is_first_open, true);
+    assert.equal(new Date(open.properties.first_open_at).toISOString(), open.properties.first_open_at);
+    assert.equal(start.session_id, open.session_id); assert.match(open.session_id, uuid);
+    assert.deepEqual(open.context.app, gameApp); assert.equal(open.channel, 'web');
+    assert.ok(start.original_timestamp <= open.original_timestamp);
+    const key = [...local.stored.keys()].find(name => name.endsWith('_first-open'));
+    assert.ok(key?.startsWith('mana_'), 'stored under the SDK key');
+    assert.equal(local.stored.get(key), open.properties.first_open_at);
+
+    // pagehide ends the session.
+    globalThis.window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const [end] = named(eventsOf(sent), 'session_end');
+    assert.equal(end.session_id, open.session_id);
+    assert.equal(typeof end.properties.duration_s, 'number'); assert.ok(end.properties.duration_s >= 0);
+    assert.equal(end.properties.errors_dropped, undefined);
+    sdk.destroy();
+
+    // The next start: not the first open, the same first_open_at, a new session.
+    sent.length = 0;
+    const again = new Analytics(gameOptions({ persistQueue: false }));
+    await again.flush();
+    const reopened = named(eventsOf(sent), 'game_open')[0];
+    assert.equal(reopened.properties.is_first_open, false);
+    assert.equal(reopened.properties.first_open_at, open.properties.first_open_at);
+    assert.notEqual(reopened.session_id, open.session_id, 'each start is a new session');
+    assert.equal(reopened.anonymous_id, open.anonymous_id);
+    again.destroy();
+  } finally { sdk.destroy(); }
+});
+
+test('game mode: a player with the first_open_at key of the old setup snippet is not counted as new', async t => {
+  const local = memoryStorage(new Map([['first_open_at', '2026-10-01T12:00:00.000Z']]));
+  browser('https://game.example/', { local });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    await sdk.flush();
+    assert.deepEqual(named(eventsOf(sent), 'game_open')[0].properties, { is_first_open: false, first_open_at: '2026-10-01T12:00:00.000Z' });
+  } finally { sdk.destroy(); }
+});
+
+test('game and persistQueue need a valid app option: without one they are off, with a console warning', async t => {
+  const { local } = browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline'); });
+  const warnings = []; t.mock.method(console, 'warn', message => warnings.push(message));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_web', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, game: true, persistQueue: true });
+  try {
+    sdk.track('clicked'); await sdk.flush();
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[0], /game option needs a valid app option/);
+    assert.match(warnings[1], /persistQueue option needs a valid app option/);
+    assert.ok(![...local.stored.keys()].some(key => key.endsWith('_queue') || key.endsWith('_first-open')), 'nothing stored');
+    globalThis.window.dispatchEvent(windowError({ message: 'boom', error: new Error('boom') }));
+    t.mock.method(globalThis, 'fetch', collector(sent));
+    await sdk.flush();
+    assert.deepEqual(tracked(eventsOf(sent)), ['clicked'], 'no game events, no captured errors');
+  } finally { sdk.destroy(); }
+  // An invalid app object turns game mode off too.
+  const invalid = new Analytics({ ...gameOptions(), app: { platform: 'playstation' } });
+  try { await invalid.flush(); assert.equal(named(eventsOf(sent), 'game_open').length, 0); } finally { invalid.destroy(); }
+});
+
+test('game mode: 30 minutes idle ends the session at its last activity; the next event starts a new one', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    t.mock.timers.tick(10 * 60000); sdk.track('level_start');
+    t.mock.timers.tick(31 * 60000); sdk.track('level_start');
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(tracked(events), ['session_start', 'game_open', 'level_start', 'session_end', 'session_start', 'level_start']);
+    const [first, , active, end, next, later] = events;
+    assert.equal(end.session_id, first.session_id);
+    assert.equal(end.original_timestamp, active.original_timestamp, 'ended at the last activity');
+    assert.equal(end.properties.duration_s, 600);
+    assert.notEqual(next.session_id, first.session_id);
+    assert.equal(later.session_id, next.session_id);
+    assert.equal(next.original_timestamp, '2026-01-01T10:41:00.000Z');
+  } finally { sdk.destroy(); }
+});
+
+test('game mode: the flush timer keeps a visible, focused game session alive, and only then', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const { document } = browser('https://game.example/');
+  let focused = true;
+  document.visibilityState = 'visible'; document.hasFocus = () => focused;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    for (let i = 0; i < 40; i++) t.mock.timers.tick(60000);
+    sdk.track('still_playing');
+    await sdk.flush();
+    assert.equal(named(eventsOf(sent), 'session_end').length, 0, 'the player was active: one session');
+    focused = false;
+    for (let i = 0; i < 40; i++) t.mock.timers.tick(60000);
+    sdk.track('back');
+    await sdk.flush();
+    const [end] = named(eventsOf(sent), 'session_end');
+    assert.equal(end.properties.duration_s, 40 * 60, 'ended at the last activity: the event after 40 minutes');
+    assert.equal(named(eventsOf(sent), 'session_start').length, 2);
+  } finally { sdk.destroy(); }
+});
+
+test('game mode: uncaught errors and unhandled rejections become error events without personal data', async t => {
+  const { window } = browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    const error = new TypeError('Cannot load https://cdn.example.com/save.json?token=abc for anna@example.com');
+    error.stack = `TypeError: ${error.message}\n    at Player.jump (https://game.example/assets/index.js?v=2:10:5)\n    at https://game.example/assets/index.js:3:1\n${'    at loop (https://game.example/a.js:1:1)\n'.repeat(40)}`;
+    window.dispatchEvent(windowError({ message: `Uncaught ${error}`, filename: 'https://game.example/assets/index.js?v=2', lineno: 10, colno: 5, error }));
+    window.dispatchEvent(rejection('Save failed for slot "three" 42'));
+    const crossOrigin = windowError({ message: 'Script error.', filename: '', lineno: 0 });
+    window.dispatchEvent(crossOrigin);
+    await sdk.flush();
+    const [uncaught, rejected, script] = named(eventsOf(sent), 'error');
+    assert.deepEqual(Object.keys(uncaught.properties), ['severity', 'message', 'handled', 'source', 'fingerprint', 'error_type', 'file', 'line', 'function', 'stack']);
+    assert.equal(uncaught.properties.severity, 'error');
+    assert.equal(uncaught.properties.message, 'Cannot load https://cdn.example.com/save.json for [email]');
+    assert.equal(uncaught.properties.error_type, 'TypeError');
+    assert.equal(uncaught.properties.handled, false);
+    assert.equal(uncaught.properties.source, 'web_window');
+    assert.equal(uncaught.properties.file, '/assets/index.js');
+    assert.equal(uncaught.properties.line, 10);
+    assert.equal(uncaught.properties.function, 'Player.jump');
+    assert.equal(uncaught.properties.fingerprint, errorFingerprint('TypeError', '', '/assets/index.js', 'Player.jump'));
+    assert.ok(uncaught.properties.stack.length <= 1024);
+    assert.ok(!JSON.stringify(uncaught).includes('anna') && !JSON.stringify(uncaught).includes('token=abc') && !uncaught.properties.stack.includes('?v=2'));
+    assert.match(uncaught.session_id, uuid);
+    assert.equal(rejected.properties.error_type, 'unhandledrejection');
+    assert.equal(rejected.properties.message, 'Save failed for slot "three" 42');
+    assert.equal(rejected.properties.file, undefined);
+    assert.equal(rejected.properties.fingerprint, errorFingerprint('unhandledrejection', 'Save failed for slot "x" 7', '', ''), 'grouped by the message without numbers and quoted text');
+    assert.match(rejected.properties.fingerprint, hex16);
+    assert.equal(script.properties.message, 'Script error.');
+    assert.equal(script.properties.error_type, 'uncaught');
+  } finally { sdk.destroy(); }
+  // destroy() removes the listeners.
+  sent.length = 0;
+  window.dispatchEvent(windowError({ message: 'late', error: new Error('late') }));
+  assert.equal(sent.length, 0);
+});
+
+test('the fingerprint is the one of the game SDKs (Unity request fixtures)', () => {
+  assert.equal(errorFingerprint('SaveFailed', 'Save failed for slot 3', '', ''), '38d0e3d0139dea87');
+  assert.equal(errorFingerprint('NullReferenceException', 'NullReferenceException: Object reference not set to an instance of an object', 'Assets/Scripts/Player.cs', 'Game.Player.Jump'), 'c2eb323ad8048b1a');
+  assert.equal(errorFingerprint('SaveFailed', 'Save failed for slot 4', '', ''), errorFingerprint('SaveFailed', 'Save failed for slot 3', '', ''));
+  assert.equal(errorFingerprint('E', "Item 'sword' 0xFF missing", '', ''), errorFingerprint('E', "Item 'axe' 0x1 missing", '', ''));
+  assert.notEqual(errorFingerprint('A', 'x', 'f.js', 'run'), errorFingerprint('B', 'x', 'f.js', 'run'));
+});
+
+test('error limits: the same fingerprint once a second, 20 errors in 10 s, 50 automatic errors in a session; drops go to errors_dropped', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const { window } = browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false, batchSize: 50 }));
+  // Errors without a stack group by the message.
+  const fire = message => window.dispatchEvent(windowError({ message, error: Object.assign(new Error(message), { stack: '' }) }));
+  try {
+    for (let i = 0; i < 5; i++) fire('same in a frame loop');
+    t.mock.timers.tick(1000); fire('same in a frame loop');
+    let errors = () => named(eventsOf(sent), 'error');
+    await sdk.flush(); await sdk.flush();
+    assert.equal(errors().length, 2, 'once a second: 4 dropped');
+    t.mock.timers.tick(10_000);
+    for (let i = 0; i < 25; i++) fire(`distinct ${'x'.repeat(i)}`);
+    await sdk.flush();
+    assert.equal(errors().length, 22, '20 in 10 s: 5 dropped');
+    for (let w = 0; w < 3; w++) { t.mock.timers.tick(10_000); for (let i = 0; i < 20; i++) fire(`window ${w} ${'y'.repeat(i)}`); await sdk.flush(); }
+    assert.equal(errors().length, 50, '50 automatic errors in one session');
+    // Manual errors skip only the session cap.
+    t.mock.timers.tick(10_000);
+    sdk.trackError('Manual after the cap', { errorType: 'SaveFailed' });
+    await sdk.flush();
+    assert.equal(errors().length, 51);
+    window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const [end] = named(eventsOf(sent), 'session_end');
+    assert.equal(end.properties.errors_dropped, 4 + 5 + (60 - 28), 'dedupe, window, then the session cap');
+  } finally { sdk.destroy(); }
+});
+
+test('trackError(): handled errors with source manual; an Error gives type, stack and place; options win', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    sdk.trackError('Save failed for slot 3', { errorType: 'SaveFailed', severity: 'critical', handled: false, properties: { slot: 3, severity: 'ignored' } });
+    const error = new RangeError('Bad level');
+    error.stack = 'loadLevel@https://game.example/js/game.js?build=9:77:3\n@https://game.example/js/game.js:1:1';
+    sdk.trackError(error);
+    sdk.trackError(new Error('custom'), { fingerprint: 'my-group', file: 'src/save.ts', line: 12, function: 'save' });
+    const big = Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`k${i}`, 'v'.repeat(200)]));
+    sdk.trackError('Too many properties', { properties: big });
+    await sdk.flush();
+    const [manual, fromError, custom, limited] = named(eventsOf(sent), 'error');
+    assert.deepEqual(manual.properties, { severity: 'critical', message: 'Save failed for slot 3', handled: false, source: 'manual', fingerprint: '38d0e3d0139dea87', error_type: 'SaveFailed', slot: 3 });
+    assert.equal(fromError.properties.handled, true, 'trackError() defaults to handled: true');
+    assert.equal(fromError.properties.error_type, 'RangeError');
+    assert.equal(fromError.properties.file, '/js/game.js');
+    assert.equal(fromError.properties.line, 77);
+    assert.equal(fromError.properties.function, 'loadLevel');
+    assert.ok(!fromError.properties.stack.includes('build=9'));
+    assert.equal(custom.properties.fingerprint, 'my-group');
+    assert.deepEqual([custom.properties.file, custom.properties.line, custom.properties.function], ['src/save.ts', 12, 'save']);
+    assert.ok(Object.keys(limited.properties).length <= 50);
+    assert.ok(new TextEncoder().encode(JSON.stringify(limited.properties)).byteLength <= 8192);
+    assert.equal(limited.properties.message, 'Too many properties', 'the error keys are kept first');
+  } finally { sdk.destroy(); }
+});
+
+test('trackError() works without game mode and sends nothing after optOut()', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_web', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+  try {
+    sdk.trackError(new Error('Checkout failed'));
+    await sdk.flush();
+    assert.deepEqual(tracked(eventsOf(sent)), ['error']);
+    assert.equal(eventsOf(sent)[0].properties.source, 'manual');
+    sdk.optOut(); sdk.trackError('after'); await sdk.flush();
+    assert.equal(eventsOf(sent).length, 1);
+  } finally { sdk.destroy(); }
+});
+
+test('game mode with consent: nothing stored and no game events before consent; withdrawal deletes the first open', async t => {
+  const jar = cookieJar(); const local = memoryStorage();
+  browser('https://game.example/', { jar, local });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ requireConsent: true }));
+  try {
+    sdk.track('menu');
+    await sdk.flush();
+    assert.deepEqual(tracked(eventsOf(sent)), ['menu']);
+    assert.equal(eventsOf(sent)[0].session_id, undefined);
+    assert.equal(local.stored.size, 0, 'no localStorage before consent'); assert.equal(jar.find('mana_').length, 0, 'no cookie before consent');
+    sdk.setConsent(true);
+    await sdk.flush();
+    assert.deepEqual(tracked(eventsOf(sent)), ['menu', 'session_start', 'game_open']);
+    assert.equal(named(eventsOf(sent), 'game_open')[0].properties.is_first_open, true);
+    assert.ok([...local.stored.keys()].some(key => key.endsWith('_first-open')));
+    sdk.setConsent(false);
+    await settle(sdk);
+    assert.ok(![...local.stored.keys()].some(key => key.endsWith('_first-open') || key.endsWith('_queue')), 'first open and stored events deleted');
+    sdk.setConsent(true);
+    await sdk.flush();
+    assert.equal(named(eventsOf(sent), 'game_open').length, 2, 'a new identity opens the game again');
+    assert.equal(named(eventsOf(sent), 'game_open')[1].properties.is_first_open, true);
+  } finally { sdk.destroy(); }
+});
+
+test('game mode: reset() ends the session with the old identity; the next event starts a new session', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    await sdk.identify('player_1');
+    sdk.reset();
+    sdk.track('after_reset');
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(tracked(events), ['session_start', 'game_open', 'identify', 'session_end', 'session_start', 'after_reset']);
+    const [start, , identify, end, next, after] = events;
+    assert.equal(end.session_id, start.session_id); assert.equal(end.anonymous_id, start.anonymous_id); assert.equal(end.user_id, 'player_1');
+    assert.equal(identify.user_id, 'player_1');
+    assert.notEqual(next.anonymous_id, start.anonymous_id); assert.equal(next.user_id, undefined);
+    assert.equal(after.session_id, next.session_id);
+  } finally { sdk.destroy(); }
+});
+
+test('snippet: data-game and data-app-platform turn on game mode', async () => {
+  const { window, document } = browser('https://game.example/');
+  document.currentScript = { dataset: { publishableKey: 'mana_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', game: 'true', persistQueue: 'false', autoPageviews: 'false' } };
+  const sent = [];
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, TextEncoder, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
+  await window.manalens.flush();
+  assert.deepEqual(sent[0].events.map(event => event.event), ['session_start', 'game_open']);
+  assert.equal(window.manalens.persist, undefined, 'data-persist-queue="false"');
+  window.manalens.destroy();
+});
+
+for (const backend of ['localStorage', 'IndexedDB']) test(`persistQueue (${backend}): unsent events survive a reload and go first, in order, with the same message_id`, async t => {
+  const jar = cookieJar(); const local = memoryStorage();
+  const idb = backend === 'IndexedDB' ? fakeIndexedDB() : undefined;
+  if (idb) globalThis.indexedDB = idb;
+  try {
+    browser('https://game.example/', { jar, local });
+    t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline'); });
+    const first = new Analytics(gameOptions());
+    first.track('level_start', { level: 1 });
+    first.track('level_complete', { level: 1 });
+    await first.flush();
+    await settle(first);
+    const queued = first.pending.map(event => event.message_id);
+    assert.equal(queued.length, 4);
+    if (idb) {
+      const [stores] = [...idb.dbs.values()];
+      assert.equal(stores.get('events').size, 4, 'in IndexedDB');
+      assert.ok(![...local.stored.keys()].some(key => key.endsWith('_queue')), 'not in localStorage');
+    } else assert.equal(JSON.parse([...local.stored.entries()].find(([key]) => key.endsWith('_queue'))[1]).length, 4);
+    first.destroy(); // the tab closes offline
+
+    const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const second = new Analytics(gameOptions({ batchSize: 50 }));
+    second.track('level_start', { level: 2 });
+    await second.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(events.slice(0, 4).map(event => event.message_id), queued, 'replayed first, in order, same message_id');
+    assert.deepEqual(tracked(events), ['session_start', 'game_open', 'level_start', 'level_complete', 'session_start', 'game_open', 'level_start']);
+    await settle(second);
+    if (idb) assert.equal([...idb.dbs.values()][0].get('events').size, 0, 'removed after the collector accepted the batch');
+    else assert.ok(![...local.stored.keys()].some(key => key.endsWith('_queue')));
+    second.destroy();
+  } finally { delete globalThis.indexedDB; }
+});
+
+test('persistQueue: a stored event goes only after acceptance; a 5xx keeps it, a 400 drops it', async t => {
+  const local = memoryStorage();
+  browser('https://game.example/', { local });
+  let status = 503;
+  t.mock.method(globalThis, 'fetch', async () => response(status));
+  const sdk = new Analytics(gameOptions({ autoPageviews: false, game: false, persistQueue: true }));
+  const stored = () => JSON.parse([...local.stored.entries()].find(([key]) => key.endsWith('_queue'))?.[1] ?? '[]').map(entry => entry.event.event);
+  try {
+    sdk.track('a'); await settle(sdk);
+    await sdk.flush(); await settle(sdk);
+    assert.deepEqual(stored(), ['a'], 'a server error keeps the stored copy');
+    status = 202; await sdk.flush(); await settle(sdk);
+    assert.deepEqual(stored(), []);
+    status = 400; sdk.track('b'); await sdk.flush(); await settle(sdk);
+    assert.deepEqual(stored(), [], 'refused for good: dropped');
+  } finally { sdk.destroy(); }
+});
+
+test('persistQueue: at most 1000 stored events, none older than 7 days; off by default outside game mode', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-10T00:00:00Z').getTime() });
+  const local = memoryStorage();
+  browser('https://game.example/', { local });
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline'); });
+  const probe = new Analytics(gameOptions({ game: false, persistQueue: true }));
+  const key = probe.keys.firstOpen.replace(/first-open$/, 'queue');
+  probe.destroy();
+  const entry = (i, at) => ({ id: `id-${i}`, seq: i, event: { type: 'track', event: `e${i}`, message_id: `id-${i}`, channel: 'web', version: '0.1.0', original_timestamp: at, context: {}, properties: {} } });
+  const old = Array.from({ length: 10 }, (_, i) => entry(i, '2026-01-02T00:00:00.000Z'));
+  const recent = Array.from({ length: 1005 }, (_, i) => entry(100 + i, '2026-01-09T00:00:00.000Z'));
+  local.setItem(key, JSON.stringify([...recent, ...old]));
+  const sdk = new Analytics(gameOptions({ game: false, persistQueue: true, maxQueueSize: 512000 }));
+  try {
+    await sdk.flush(); await settle(sdk);
+    const kept = JSON.parse(local.getItem(key));
+    assert.equal(kept.length, 1000);
+    assert.equal(kept[0].id, 'id-105', 'the oldest beyond 1000 are dropped');
+    assert.ok(kept.every(item => item.event.original_timestamp === '2026-01-09T00:00:00.000Z'), 'events older than 7 days are dropped');
+  } finally { sdk.destroy(); }
+
+  // Without the option, and outside game mode, nothing is stored.
+  const plain = new Analytics({ ...gameOptions({ game: false }) });
+  plain.track('x'); await plain.flush();
+  assert.equal(plain.persist, undefined);
+  plain.destroy();
+  const off = new Analytics(gameOptions({ persistQueue: false }));
+  assert.equal(off.persist, undefined, 'persistQueue: false in game mode');
+  off.destroy();
+});
+
+test('persistQueue respects consent and optOut(): nothing written without consent; stored events deleted', async t => {
+  const jar = cookieJar(); const local = memoryStorage();
+  browser('https://game.example/', { jar, local });
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('offline'); });
+  const hasQueue = () => [...local.stored.keys()].some(key => key.endsWith('_queue'));
+  const sdk = new Analytics(gameOptions({ requireConsent: true }));
+  try {
+    sdk.track('before_consent'); await sdk.flush(); await settle(sdk);
+    assert.equal(local.stored.size, 0, 'nothing written before consent');
+    sdk.setConsent(true); sdk.track('after_consent'); await sdk.flush(); await settle(sdk);
+    assert.ok(hasQueue());
+    const stored = JSON.parse([...local.stored.entries()].find(([key]) => key.endsWith('_queue'))[1]).map(entry => entry.event.event);
+    assert.ok(!stored.includes('before_consent'), 'events from before consent are not stored');
+    sdk.optOut(); await settle(sdk);
+    assert.ok(!hasQueue(), 'optOut() deletes the stored events');
+    sdk.track('opted_out'); await settle(sdk);
+    assert.ok(!hasQueue(), 'and nothing is written after it');
+  } finally { sdk.destroy(); }
+  // A reload while opted out reads and writes no queue.
+  const reloaded = new Analytics(gameOptions());
+  try { reloaded.track('x'); await reloaded.flush(); await settle(reloaded); assert.ok(!hasQueue()); } finally { reloaded.destroy(); }
 });

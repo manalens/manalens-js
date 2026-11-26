@@ -69,6 +69,8 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | `session-id` | cookie, else localStorage, else memory | 30 minutes of inactivity, and at most 24 hours from the start of the session | `session_id` on each event |
 | `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
+| `first-open` | localStorage, else memory | Until `optOut()` or `setConsent(false)` | Game mode only: the time of the first `game_open` |
+| `queue` | IndexedDB, else localStorage | Until the collector accepts the events; at most 1000 events and 7 days | `persistQueue` only: unsent events |
 
 Like Formo, cookies are scoped to the apex domain (`.example.com`) by default
 (`crossSubdomainCookies: true`), so `example.com` and `play.example.com` share
@@ -118,9 +120,12 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `ready` | none | `(analytics) => void`, called once at the end of the constructor (also when disabled). Snippet: the `manalens:ready` event |
 | `errorHandler` | none | `(error) => void`, called when events are dropped: refused by the collector, or a server error after `retryCount` retries. See [Delivery errors](#delivery-errors) |
 | `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
+| `game` | `false` | Game mode: `game_open`, `session_start` / `session_end` and captured errors. Needs `app`. See [Game mode](#game-mode). Snippet: `data-game="true"` |
+| `persistQueue` | `true` in game mode, else `false` | Keep unsent events in IndexedDB (else localStorage) for the next load. Needs `app`. See [Persistent queue](#persistent-queue). Snippet: `data-persist-queue` |
 
-**Delivery.** Events wait in memory (never in browser storage) and are sent in
-batches. After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
+**Delivery.** Events wait in memory and are sent in batches. They go to
+browser storage only with the `persistQueue` option (a game with `app`; see
+[Persistent queue](#persistent-queue)). After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
 A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
 
@@ -238,8 +243,10 @@ createAnalytics({
 ### Methods
 
 `page(properties?)`, `track(event, properties?)`, `identify(userId, traits?)`,
-`traits(traits)`, `link({ provider: 'steam', ticket })`, `reset()`, `setConsent(granted)`, `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`,
-`getAnonymousId()`, `getSessionId()`, `flush(keepalive?)`, `destroy()`.
+`traits(traits)`, `link({ provider: 'steam', ticket })`,
+`trackError(errorOrMessage, options?)`, `reset()`, `setConsent(granted)`,
+`optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`, `getAnonymousId()`,
+`getSessionId()`, `flush(keepalive?)`, `destroy()`.
 
 ### Sessions
 
@@ -424,9 +431,98 @@ plain web events. The SDK sends a copy: later changes to the object do nothing.
 Snippet: `data-app-platform` (required for the others to apply),
 `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`.
 
-For the standard game events (`game_open`, `session_start`, `session_end`,
-`error`, `app_unclean_exit`, `game_updated`), see the analytics docs
+With `game: true` the SDK sends `game_open`, `session_start`, `session_end`
+and `error` for you; see [Game mode](#game-mode). For the other standard game
+events (`app_unclean_exit`, `game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
+
+### Game mode
+
+```ts
+const analytics = createAnalytics({
+  publishableKey: 'YOUR_PUBLISHABLE_KEY',
+  endpoint: 'https://api.example.com',
+  app: { platform: 'web', storefront: 'itch', app_version: '1.4.0', build: '571', engine: 'other' },
+  game: true,
+});
+```
+
+`game: true` needs a valid `app` option. Without one, game mode stays off and
+the SDK writes one `console.warn`. Websites leave it off. The events match the
+Godot, Unity and Unreal SDKs, so the Game KPIs and Game health dashboards count
+them:
+
+| Event | Properties | When |
+| --- | --- | --- |
+| `session_start` | none | Before `game_open`, and before the first event of each new session |
+| `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
+| `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
+| `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack` when known | A window `error` or `unhandledrejection` (`source: "web_window"`, `handled: false`), or `trackError()` (`source: "manual"`) |
+
+- **Sessions** use the web session rules above (30 minutes idle, 24 hours at
+  most), with no second clock. Each start is a new session. While the page is
+  visible and focused, the flush timer keeps the open session alive, as the
+  game SDKs do while the game has focus.
+- **First open** is kept in the SDK storage (key `first-open`). A player who
+  has the `first_open_at` key of the earlier hand-written setup snippet is not
+  counted as new.
+- **Consent mode:** `game_open` and the sessions wait for `setConsent(true)`;
+  nothing is stored before. `setConsent(false)` and `optOut()` delete the
+  first open. `reset()` sends `session_end` with the old identity; the next
+  event starts a new session.
+- `app_unclean_exit` is not sent: a browser cannot tell a crash from a close.
+  In Electron, send it from the main process with `@manalens/node`.
+
+### Errors
+
+Captured errors (window `error` and `unhandledrejection`) lose personal data
+before they are queued: URLs lose their user, query and fragment, emails
+become `[email]`, home folders become `~`, and token values and long IDs become
+`[redacted]`. `file` is the script path, without origin and query.
+
+```ts
+try { await saveGame(slot); } catch (error) {
+  analytics.trackError(error, { severity: 'critical', properties: { slot } });
+}
+analytics.trackError('Save failed for slot 3', { errorType: 'SaveFailed', handled: false });
+```
+
+`trackError(errorOrMessage, options?)` works in every mode. An `Error` gives
+the message, `error_type` (its `name`), the stack and the place in the code.
+Options: `severity` (`debug`, `info`, `warning`, `error` (default),
+`critical`), `errorType`, `handled` (default `true`), `fingerprint`, `stack`,
+`file`, `line`, `function`, `properties`. The text you pass is sent as it is.
+
+- **Grouping** is the rule of the game SDKs: `fingerprint` is a hash of
+  `error_type`, `file` and `function` (not the line). Without a file or
+  function, it is a hash of the message with numbers and quoted text removed,
+  so `Save failed for slot 3` and `Save failed for slot 4` are one group. Pass
+  `fingerprint` to group in your own way.
+- **Limits:** the same fingerprint at most once a second, at most 20 errors in
+  10 seconds, and at most 50 captured errors in one session (`trackError()`
+  skips only this last limit). The next `session_end` has the number of
+  dropped errors in `errors_dropped`. `message` and `stack` are at most 1024
+  characters; the properties at most 50 keys and 8 KB of JSON.
+
+### Persistent queue
+
+By default, unsent events wait in memory: a crash, a lost GPU context or a tab
+closed offline loses them. With `persistQueue` (on by default in game mode,
+allowed only with `app`), the SDK also keeps each event in IndexedDB (else
+localStorage), as the Godot and Unity SDKs keep a disk queue:
+
+- At most 1000 events and 7 days; older events are dropped first.
+- On the next load, the stored events are sent first, in order, before the new
+  events. Each keeps its `message_id`, so an event sent twice counts once.
+- A stored event is removed only when the collector accepts its batch (or
+  refuses it for good).
+- Consent mode: nothing is stored before consent. `setConsent(false)` and
+  `optOut()` delete the stored events. `reset()` keeps them, as it keeps the
+  events in memory.
+- Two tabs of the same game can both send a stored event; the `message_id`
+  makes it count once.
+
+Set `persistQueue: false` to keep game mode without browser storage for events.
 
 ### Game portals (itch.io, CrazyGames)
 
@@ -458,6 +554,8 @@ console logs. Add the `data-app-*` attributes for a browser game (see above).
 | `data-auto-pageviews="false"` | `autoPageviews: false` |
 | `data-debug="true"` | `logger: { enabled: true }` |
 | `data-app-platform`, `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine` | `app` |
+| `data-game="true"` | `game: true` (needs `data-app-platform`) |
+| `data-persist-queue="true"` or `"false"` | `persistQueue` |
 
 Other options (`tracking`, `batchSize`, `ready`, `errorHandler` ...) need the
 npm package.

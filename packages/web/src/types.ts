@@ -121,6 +121,22 @@ export interface AnalyticsOptions {
    * invalid object is dropped with a console warning.
    */
   app?: AppInfo;
+  /**
+   * Game mode for a browser or Electron game, default false. Needs a valid
+   * `app` option: without one, game mode is off and a console warning says
+   * why. The SDK then sends `game_open` on each start, `session_start` and
+   * `session_end` (with `duration_s`), and an `error` event for each uncaught
+   * error and unhandled promise rejection. Websites leave it off.
+   */
+  game?: boolean;
+  /**
+   * Keep unsent events in browser storage (IndexedDB, else localStorage) and
+   * send them on the next load: at most 1000 events, none older than 7 days.
+   * Only with a valid `app` option. Default true in game mode, else false.
+   * Nothing is written before consent in consent mode, and optOut() or
+   * setConsent(false) deletes the stored events.
+   */
+  persistQueue?: boolean;
 }
 
 /** The request of link(): a Steam ticket from `GetAuthTicketForWebApi("manalens")`, as hex. */
