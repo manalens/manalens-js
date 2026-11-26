@@ -239,10 +239,10 @@ jobs:
 
       # The hash comes from the tarball that was published, never from the
       # network. The script first proves the npm registry serves this exact
-      # tarball (dist.integrity), then polls jsDelivr until it serves identical
+      # tarball (dist.integrity), then polls cdn.manalens.dev until it serves identical
       # bytes, and fails the job if either never matches. A CDN error body or an
       # empty body (sha384-OLBgp1Gs...) can never reach the release notes.
-      - name: Compute SRI and wait for jsDelivr
+      - name: Compute SRI and wait for cdn.manalens.dev
         shell: bash
         run: |
           set -euo pipefail
