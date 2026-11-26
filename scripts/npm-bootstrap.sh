@@ -34,7 +34,14 @@ else
 }
 JSON
   printf '# %s\n\nPlaceholder for the npm trusted publishing setup. Install the latest version.\n' "$name" > "$dir/README.md"
-  (cd "$dir" && npm publish --access public --tag bootstrap)
+  # A rerun right after the first publish gets 409 "previously staged": the
+  # version is published but npm is still processing it. Go on and wait.
+  if ! out=$(cd "$dir" && npm publish --access public --tag bootstrap 2>&1); then
+    echo "$out"
+    grep -q "previously staged\|cannot publish over" <<<"$out" || exit 1
+  else
+    echo "$out"
+  fi
 fi
 
 # A new package can take a few minutes to appear on the registry.
