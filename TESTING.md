@@ -34,7 +34,7 @@ output: its SHA-384 matches a direct `openssl` hash of
 `dist/snippet.global.js` from the tarball, and repeated packs give the same
 hash. It exits non-zero for an empty tarball, a missing or empty bundle, a
 version mismatch, an invalid version, an unpublished version, and when npm or
-jsDelivr never serve matching bytes. The registry and CDN success path was
+the CDN never serve matching bytes. The registry and CDN success path was
 checked against the published `@formo/analytics@1.42.1` (via the
 `SRI_PACKAGE` / `SRI_FILE` test overrides). `npm publish --dry-run` on the
 packed tarball succeeds. The workflow YAML parses; actionlint was not run

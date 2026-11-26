@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Print the pinned jsDelivr <script> tag, with a SHA-384 SRI hash, for the
+# Print the pinned cdn.manalens.dev <script> tag, with a SHA-384 SRI hash, for the
 # browser snippet (dist/snippet.global.js).
 #
 # The hash always comes from an npm tarball, never from the network: a CDN
@@ -17,7 +17,7 @@
 #   --version X.Y.Z    Version for the CDN URL; without --tarball, `npm pack` it from npm.
 #   --check-registry   Poll npm until the registry's dist.integrity for the version
 #                      equals this tarball's sha512 (proves it is the published one).
-#   --check-cdn        Poll jsDelivr until it serves bytes identical to the tarball.
+#   --check-cdn        Poll the CDN until it serves bytes identical to the tarball.
 #   --attempts N       Poll attempts (default 20).  --interval S  Seconds between (default 30).
 #
 # The snippet goes to stdout; progress goes to stderr.
@@ -107,7 +107,13 @@ if $CHECK_REGISTRY; then
   log "Registry: tarball matches the published $PACKAGE@$VERSION"
 fi
 
-URL="https://cdn.jsdelivr.net/npm/$PACKAGE@$VERSION/$FILE"
+# Our own host (P-2538): it serves only this SDK, so customer CSPs stay narrow. It copies each
+# version from npm after it checks dist.integrity. A test package (SRI_PACKAGE) uses jsDelivr.
+if [[ "$PACKAGE" == "@manalens/web" && "$FILE" == "dist/snippet.global.js" ]]; then
+  URL="https://cdn.manalens.dev/web@$VERSION"
+else
+  URL="https://cdn.jsdelivr.net/npm/$PACKAGE@$VERSION/$FILE"
+fi
 if $CHECK_CDN; then
   CDN_HASH=""
   for attempt in $(seq 1 "$ATTEMPTS"); do
