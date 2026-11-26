@@ -26,7 +26,7 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
 
 ```html
 <script
-  src="https://cdn.jsdelivr.net/npm/@manalens/web@0.1.0/dist/snippet.global.js"
+  src="https://cdn.manalens.dev/web@0.1.0"
   integrity="sha384-REPLACE_WITH_THE_HASH_FROM_THE_RELEASE_NOTES"
   crossorigin="anonymous"
   data-publishable-key="YOUR_PUBLISHABLE_KEY"
@@ -37,11 +37,11 @@ Add this tag to the `<head>` of every page. Pin the exact version and keep the
 
 Get the `integrity` value in one of two ways:
 - Copy the complete tag from the GitHub release notes for that version. The
-  release workflow writes it after it checks that jsDelivr serves the
+  release workflow writes it after it checks that cdn.manalens.dev serves the
   published bytes.
 - Run `bash scripts/generate-sri.sh --version 0.1.0 --check-registry --check-cdn`.
   It downloads the published npm tarball, hashes `dist/snippet.global.js` from
-  it, and checks that npm and jsDelivr serve the same bytes.
+  it, and checks that npm and cdn.manalens.dev serve the same bytes.
 
 Change the version in the URL and the hash together. See
 [Snippet attributes](#snippet-attributes) for options. The instance is
@@ -460,7 +460,7 @@ Releases publish from `.github/workflows/release.yml`:
    tarball with npm provenance (after approval in the `npm-publish`
    environment).
 4. It then checks that the npm registry serves the same tarball, hashes
-   `dist/snippet.global.js` from it, waits until jsDelivr serves identical
+   `dist/snippet.global.js` from it, waits until cdn.manalens.dev serves identical
    bytes, and adds the pinned snippet tag to the GitHub release notes.
 
 Run the workflow manually (`workflow_dispatch`) for a dry run: it runs
