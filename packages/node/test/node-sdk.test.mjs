@@ -555,3 +555,15 @@ test('link: a bad call throws; after shutdown nothing is sent', async () => {
   assert.deepEqual(await analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON }), { linked: false, status: 0, code: 'SHUT_DOWN' });
   assert.equal(calls.length, 0);
 });
+
+test('link: shutdown() during the Retry-After wait stops the second try (node has no consent or reset)', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { analytics, calls } = client(SECRET, {}, [linkResponse(429, 'RATE_LIMITED', { 'retry-after': '2' }), linkResponse(200)]);
+  const pending = analytics.link({ provider: 'steam', ticket: TICKET, anonymousId: ANON });
+  await new Promise(resolve => setImmediate(resolve));
+  const closing = analytics.shutdown(10);
+  t.mock.timers.tick(2000);
+  await closing;
+  assert.deepEqual(await pending, { linked: false, status: 0, code: 'SHUT_DOWN' });
+  assert.equal(calls.length, 1, 'no second request');
+});

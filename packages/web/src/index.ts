@@ -369,6 +369,9 @@ export class Analytics {
     if (this.pageExcluded()) return { linked: false, status: 0, code: 'EXCLUDED' };
     const body = JSON.stringify({ provider: 'steam', ticket: request.ticket, anonymous_id: generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies) });
     const url = `${resolveApiEndpoint(this.options)}/v0/link`;
+    // Identity at the first send: a retry goes out only when nothing changed during the wait.
+    const generation = this.identityGeneration;
+    const optOutGeneration = this.optOutGeneration;
     for (let attempt = 0; ; attempt++) {
       let response: Response;
       try {
@@ -381,7 +384,12 @@ export class Analytics {
       const retryAfter = Number(response.headers?.get?.('retry-after'));
       if (response.status === 429 && attempt === 0 && Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= MAX_RETRY_AFTER_MS / 1000) {
         await new Promise(resolve => setTimeout(resolve, retryAfter * 1000));
-        if (!this.active()) return { linked: false, status: 0, code: 'DISABLED' };
+        // The same gates as the first send. After reset(), setConsent(false), optOut() or a
+        // move to an excluded page, the old ticket and anonymous ID are not sent again.
+        if (!this.active() || optOutGeneration !== this.optOutGeneration) return { linked: false, status: 0, code: 'DISABLED' };
+        if (!this.identityAllowed()) return { linked: false, status: 0, code: 'CONSENT_REQUIRED' };
+        if (generation !== this.identityGeneration) return { linked: false, status: 0, code: 'IDENTITY_CHANGED' };
+        if (this.pageExcluded()) return { linked: false, status: 0, code: 'EXCLUDED' };
         continue;
       }
       const reason = await refusalReason(response);

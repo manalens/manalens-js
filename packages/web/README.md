@@ -339,7 +339,10 @@ if (!result.linked) console.warn('Steam link failed', result.status, result.code
 - It returns `{ linked, status, code? }` and never throws for an HTTP or
   network error. `code` is the API error code (for example
   `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`) or `DISABLED`,
-  `CONSENT_REQUIRED`, `EXCLUDED` or `NETWORK_ERROR`.
+  `CONSENT_REQUIRED`, `EXCLUDED`, `NETWORK_ERROR` or `IDENTITY_CHANGED`.
+- During the `Retry-After` wait, `reset()`, `setConsent(false)`, `optOut()`
+  or a move to an excluded page stops the second try: the old ticket and
+  anonymous ID are not sent again.
 - A bad provider or ticket throws.
 
 See [Steam ownership](https://docs.manalens.dev/features/steam-ownership) and

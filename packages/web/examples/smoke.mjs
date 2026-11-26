@@ -1573,3 +1573,27 @@ test('link(): bad input throws; nothing is sent before consent, when disabled, o
     assert.equal(calls, 0);
   } finally { consent.destroy(); disabled.destroy(); opted.destroy(); opted.optIn(); }
 });
+
+test('link(): consent withdrawn, reset(), optOut() or an excluded page during the Retry-After wait stops the second try', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const cases = [
+    ['setConsent(false)', sdk => sdk.setConsent(false), 'CONSENT_REQUIRED'],
+    ['reset()', sdk => sdk.reset(), 'IDENTITY_CHANGED'],
+    ['optOut()', sdk => sdk.optOut(), 'DISABLED'],
+    ['excluded page', () => { globalThis.location = new URL('https://example.com/admin'); }, 'EXCLUDED'],
+  ];
+  for (const [name, change, code] of cases) {
+    browser('https://example.com/');
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => { calls++; return { ...response(429, { 'retry-after': '2' }), text: async () => '{"error":{"code":"RATE_LIMITED"}}' }; });
+    const sdk = make({ publishableKey: 'mana_pk_link', tracking: { excludePaths: ['/admin'] } });
+    try {
+      const pending = sdk.link({ provider: 'steam', ticket: linkTicket });
+      await new Promise(resolve => setImmediate(resolve));
+      change(sdk);
+      t.mock.timers.tick(2000);
+      assert.deepEqual(await pending, { linked: false, status: 0, code }, name);
+      assert.equal(calls, 1, `${name}: no second request`);
+    } finally { sdk.destroy(); sdk.optIn(); }
+  }
+});

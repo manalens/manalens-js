@@ -135,7 +135,8 @@ export interface LinkRequest {
  * `status` is the HTTP status (0 when nothing was sent or the network
  * failed). `code` is the error code of the API, such as
  * `STEAM_TICKET_INVALID` or `STEAM_NOT_CONNECTED`, or a code of the SDK:
- * `DISABLED`, `CONSENT_REQUIRED`, `EXCLUDED` or `NETWORK_ERROR`.
+ * `DISABLED`, `CONSENT_REQUIRED`, `EXCLUDED`, `NETWORK_ERROR`, or
+ * `IDENTITY_CHANGED` (reset() or a consent change during a Retry-After wait).
  */
 export interface LinkResult {
   linked: boolean;
