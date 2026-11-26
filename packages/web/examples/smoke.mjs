@@ -2038,3 +2038,43 @@ test('persistQueue respects consent and optOut(): nothing written without consen
   const reloaded = new Analytics(gameOptions());
   try { reloaded.track('x'); await reloaded.flush(); await settle(reloaded); assert.ok(!hasQueue()); } finally { reloaded.destroy(); }
 });
+
+test('errors: a 1 MB message and a 1 MB stack are cut before cleaning and parsing, and finish fast', async t => {
+  const { window } = browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  const MB = 1024 * 1024;
+  // Inputs that make an unbounded pattern scan the rest of the string from each position.
+  const inputs = [
+    'a'.repeat(MB),
+    'a.'.repeat(MB / 2),
+    'token="'.repeat(MB / 7),
+    'eyJ'.repeat(MB / 3),
+    'x'.repeat(MB - 3) + '://',
+    `at ${'f ('.repeat(MB / 3)}`,
+    `${'a'.repeat(MB)}@${'b'.repeat(MB)}`,
+  ];
+  try {
+    const started = performance.now();
+    for (const [i, text] of inputs.entries()) {
+      const error = new Error(text);
+      error.stack = `${text}\n${text}\n    at run (https://game.example/a.js:1:1)`;
+      window.dispatchEvent(windowError({ message: text, filename: `https://game.example/${text}`, lineno: 1, error }));
+      window.dispatchEvent(rejection(Object.assign(new Error(`r${i}${text}`), { stack: text })));
+      sdk.trackError(`${i}${text}`, { errorType: `Big${i}` });
+      sdk.trackError(Object.assign(new Error(`m${i}`), { stack: text }), { errorType: `Stack${i}` });
+    }
+    assert.ok(errorFingerprint('E', 'a'.repeat(MB), '', '').length === 16);
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 2000, `took ${Math.round(elapsed)} ms`);
+    await sdk.flush(); await sdk.flush(); await sdk.flush();
+    const errors = named(eventsOf(sent), 'error');
+    assert.ok(errors.length > 0);
+    for (const event of errors) {
+      assert.ok(event.properties.message.length <= 1024);
+      assert.ok((event.properties.stack ?? '').length <= 1024);
+      assert.ok((event.properties.file ?? '').length <= 256);
+      assert.ok(new TextEncoder().encode(JSON.stringify(event.properties)).byteLength <= 8192);
+    }
+  } finally { sdk.destroy(); }
+});

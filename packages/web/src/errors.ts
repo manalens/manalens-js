@@ -37,6 +37,17 @@ export const MAX_PROPERTY_BYTES = 8 * 1024;
 
 const left = (value: string, max: number) => value.length > max ? value.slice(0, max) : value;
 
+/**
+ * Captured text (messages, stacks, rejection reasons, file names) can be of
+ * any length. Every helper here cuts its input to this length first, and its
+ * output again, so the regular expressions always run on a short string.
+ */
+export const MAX_INPUT = 4 * MAX_STRING;
+/** firstFrame() reads at most this many stack lines, each at most this long. */
+const MAX_FRAMES = 50;
+const MAX_FRAME_LINE = MAX_STRING;
+const bounded = (value: unknown) => left(typeof value === 'string' ? value : '', MAX_INPUT);
+
 /** SHA-1 of the UTF-8 text, as hex. Synchronous, so an error is queued in the same call. */
 export function sha1Hex(text: string): string {
   const bytes = new TextEncoder().encode(text);
@@ -69,15 +80,16 @@ export function sha1Hex(text: string): string {
 export function errorFingerprint(errorType: string, message: string, file: string, fn: string): string {
   const basis = file || fn
     ? `${errorType}|${file}|${fn}`
-    : `${errorType}|${(message ?? '').replace(/"[^"]*"|'[^']*'/g, '?').replace(/0x[0-9A-Fa-f]+|\d+/g, 'N')}`;
+    : `${errorType}|${bounded(message).replace(/"[^"]*"|'[^']*'/g, '?').replace(/0x[0-9A-Fa-f]+|\d+/g, 'N')}`;
   return sha1Hex(basis).slice(0, 16);
 }
 
 /** The first stack frame: Chrome and Node (`at fn (file:1:2)`), Firefox and Safari (`fn@file:1:2`). */
 export function firstFrame(stack: string | undefined): { file: string; line: number; fn: string } | undefined {
-  if (!stack) return undefined;
-  for (const raw of stack.split('\n')) {
+  if (!stack || typeof stack !== 'string') return undefined;
+  for (const raw of bounded(stack).split('\n', MAX_FRAMES)) {
     const line = raw.trim();
+    if (line.length > MAX_FRAME_LINE) continue;
     const v8 = /^at (?:(.+?) \()?(.+?):(\d+)(?::\d+)?\)?$/.exec(line);
     const gecko = v8 ? null : /^([^\s@]*)@(.+?):(\d+)(?::\d+)?$/.exec(line);
     const match = v8 ?? gecko;
@@ -91,7 +103,8 @@ export function firstFrame(stack: string | undefined): { file: string; line: num
  * A script location without personal data: the path of an http(s) or file
  * URL (no origin, query or fragment), other URLs without query and fragment.
  */
-export function cleanFile(file: string): string {
+export function cleanFile(input: string): string {
+  const file = bounded(input);
   if (!file) return '';
   try {
     const url = new URL(file);
@@ -113,10 +126,10 @@ const END = `\\s"'<>()`;
  * digits, _ and - (also JWTs and base64 runs) become [redacted].
  */
 export function cleanMessage(text: string): string {
-  let out = text ?? '';
+  let out = bounded(text);
   out = out.replace(new RegExp(`(?:/Users/|/home/)[^/\\\\${END}]+`, 'gi'), '~');
   out = out.replace(new RegExp(`(^|[^A-Za-z0-9_])[A-Za-z]:[\\\\/]Users[\\\\/][^/\\\\${END}]+`, 'gi'), '$1~');
-  out = out.replace(new RegExp(`([A-Za-z][A-Za-z0-9+.-]*://)([^${END}]*)`, 'g'), (_all, scheme: string, rest: string) => {
+  out = out.replace(new RegExp(`([A-Za-z][A-Za-z0-9+.-]{0,31}://)([^${END}]*)`, 'g'), (_all, scheme: string, rest: string) => {
     const noQuery = rest.split(/[?#]/)[0]!;
     const slash = noQuery.indexOf('/');
     let authority = slash < 0 ? noQuery : noQuery.slice(0, slash);
@@ -125,19 +138,19 @@ export function cleanMessage(text: string): string {
     if (at >= 0) authority = authority.slice(at + 1);
     return scheme + authority + path;
   });
-  out = out.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '[email]');
+  out = out.replace(/[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){1,8}/g, '[email]');
   out = out.replace(/(bearer )([^\s"'<>()]+)/gi, (_all, name: string, value: string) => value === '[redacted]' ? name + value : `${name}[redacted]`);
-  out = out.replace(/(authorization|key|token|secret|password)(["']?\s*[:=]\s*)("[^"]*"?|'[^']*'?|[^\s"'<>()&,;\]}]+)/gi, (_all, name: string, sep: string, value: string) => {
+  out = out.replace(/(authorization|key|token|secret|password)(["']?[ \t]{0,16}[:=][ \t]{0,16})("[^"]{0,1024}"?|'[^']{0,1024}'?|[^\s"'<>()&,;\]}]{1,1024})/gi, (_all, name: string, sep: string, value: string) => {
     if (/^\[redacted\]$/.test(value)) return name + sep + value;
     const quote = value[0] === '"' || value[0] === "'" ? value[0] : '';
     return `${name}${sep}${quote}[redacted]${quote && value.endsWith(quote) && value.length > 1 ? quote : ''}`;
   });
-  out = out.replace(/eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+/g, '[redacted]');
+  out = out.replace(/eyJ[A-Za-z0-9_-]{0,2048}\.[A-Za-z0-9_-]{0,2048}\.[A-Za-z0-9_-]{1,2048}/g, '[redacted]');
   out = out.replace(/[A-Za-z0-9_\-+/=]{24,}/g, run => {
     if (run.includes('+') || run.endsWith('=')) return '[redacted]';
     return run.replace(/[A-Za-z0-9_-]{24,}/g, '[redacted]');
   });
-  return out;
+  return left(out, MAX_INPUT);
 }
 
 /**
