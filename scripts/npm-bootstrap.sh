@@ -35,6 +35,15 @@ else
 JSON
   printf '# %s\n\nPlaceholder for the npm trusted publishing setup. Install the latest version.\n' "$name" > "$dir/README.md"
   (cd "$dir" && npm publish --access public --tag bootstrap)
+fi
+
+# A new package can take a few minutes to appear on the registry.
+for _ in $(seq 1 60); do
+  npm view "$name@$version" version >/dev/null 2>&1 && break
+  echo "Waiting for npm to show $name@$version ..."; sleep 10
+done
+npm view "$name@$version" version >/dev/null 2>&1 || { echo "npm does not show $name@$version yet. Run this script again in a few minutes." >&2; exit 1; }
+if [ -z "$(npm view "$name@$version" deprecated 2>/dev/null)" ]; then
   npm deprecate "$name@$version" "Placeholder. Install the latest version."
 fi
 
