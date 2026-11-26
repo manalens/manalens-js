@@ -34,14 +34,11 @@ else
 }
 JSON
   printf '# %s\n\nPlaceholder for the npm trusted publishing setup. Install the latest version.\n' "$name" > "$dir/README.md"
-  # A rerun right after the first publish gets 409 "previously staged": the
-  # version is published but npm is still processing it. Go on and wait.
-  log="$dir/publish.log"
-  set +e
-  (cd "$dir" && npm publish --access public --tag bootstrap) 2>&1 | tee "$log"
-  status=${PIPESTATUS[0]}
-  set -e
-  if [ "$status" -ne 0 ] && ! grep -qi "previously staged\|cannot publish over" "$log"; then exit "$status"; fi
+  # npm publish runs on the terminal, so npm can show its browser login. A
+  # rerun right after the first publish fails with 409 "previously staged":
+  # the version is published but npm is still processing it. So a failure here
+  # goes on to the wait below, which stops if the version never appears.
+  (cd "$dir" && npm publish --access public --tag bootstrap) || echo "npm publish failed. Checking whether npm has the version anyway ..."
 fi
 
 # A new package can take a few minutes to appear on the registry.
