@@ -133,6 +133,23 @@ test('browser snippet initializes and sends a pageview', async () => {
   window.manalens.destroy();
 });
 
+test('snippet works on an http:// page, where crypto.randomUUID is missing (not a secure context)', async () => {
+  const { window, document } = browser('http://example.com/');
+  document.currentScript = { dataset: { publishableKey: 'mana_pk_example', endpoint: 'https://collector.example' } };
+  const sent = [];
+  const insecureCrypto = { getRandomValues: array => webcrypto.getRandomValues(array) };
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: insecureCrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
+  assert.ok(window.manalens);
+  window.manalens.track('level_start');
+  await window.manalens.flush();
+  const events = sent.flatMap(body => body.events);
+  assert.ok(events.length >= 2);
+  for (const event of events) { assert.match(event.anonymous_id, uuid); assert.match(event.message_id, uuid); assert.match(event.session_id, uuid); }
+  assert.equal(new Set(events.map(event => event.message_id)).size, events.length);
+  window.manalens.destroy();
+});
+
 for (const [attr, apex] of [[undefined, true], ['true', true], ['false', false]]) test(`snippet data-cross-subdomain=${attr} ${apex ? 'scopes the cookie to the apex domain' : 'keeps the cookie host-only'}`, async () => {
   const { window, document, jar } = browser('https://play.snippet.com/');
   document.currentScript = { dataset: { publishableKey: 'mana_pk_snippet', endpoint: 'https://collector.example', ...(attr ? { crossSubdomain: attr } : {}) } };

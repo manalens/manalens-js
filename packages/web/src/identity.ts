@@ -15,6 +15,20 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-
 /** Page-lifetime fallback when cookies and localStorage are both unavailable. */
 const volatile = new Map<string, string>();
 
+/**
+ * A random v4 UUID. `crypto.randomUUID` exists only in secure contexts (HTTPS
+ * and localhost), so on a plain http:// page the ID is built from
+ * `crypto.getRandomValues`, which works in every context.
+ */
+export function randomId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function validId(value: string | undefined): string | undefined {
   return value && UUID.test(value) ? value : undefined;
 }
@@ -40,7 +54,7 @@ function persist(key: string, value: string, maxAge: number, crossSubdomain: boo
 
 /** Read the anonymous ID (cookie, then localStorage, then memory) or create one, and re-persist it. */
 export function generateAnonymousId(key: string, crossSubdomain: boolean): string {
-  const id = validId(getCookie(key)) ?? validId(readLocal(key)) ?? validId(volatile.get(key)) ?? crypto.randomUUID();
+  const id = validId(getCookie(key)) ?? validId(readLocal(key)) ?? validId(volatile.get(key)) ?? randomId();
   // Re-setting on every read refreshes the one-year expiry and migrates a
   // legacy host-only cookie to the apex domain when cross-subdomain is on.
   persist(key, id, ONE_YEAR_SECONDS, crossSubdomain);
@@ -85,7 +99,7 @@ export function touchSessionId(key: string, crossSubdomain: boolean, now = Date.
 
 /** touchSessionId() with the session's start time (game mode measures `duration_s` from it). */
 export function touchSession(key: string, crossSubdomain: boolean, now = Date.now()): { id: string; startedAt: number } {
-  const session = storedSession(key, now) ?? { id: crypto.randomUUID(), startedAt: now };
+  const session = storedSession(key, now) ?? { id: randomId(), startedAt: now };
   persist(key, `${session.id}.${now}.${session.startedAt}`, SESSION_TIMEOUT_MS / 1000, crossSubdomain);
   return session;
 }

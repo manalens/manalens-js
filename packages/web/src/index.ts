@@ -1,6 +1,6 @@
 import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
-import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
+import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, randomId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
 import { readLocal, removeLocal, storageKey, writeLocal } from './storage';
 import { cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
 import { PersistentQueue } from './queue';
@@ -646,7 +646,7 @@ export class Analytics {
     return {
       type,
       ...(event ? { event } : {}),
-      message_id: crypto.randomUUID(),
+      message_id: randomId(),
       channel: 'web',
       version: LIBRARY_VERSION,
       original_timestamp: originalTimestamp,
