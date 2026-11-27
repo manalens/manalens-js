@@ -31,8 +31,9 @@ jobs:
             echo "@manalens/web is not on npm yet. Nothing to check."
             exit 0
           fi
-          # 0.0.0-bootstrap.0 is the trusted publishing placeholder (RELEASING.md): it has no snippet.
-          for VERSION in $(node -p "[].concat(JSON.parse(process.argv[1])).filter(v => !v.includes('-bootstrap.')).join(' ')" "$VERSIONS"); do
+          # 0.0.0-* versions (0.0.0-bootstrap.0, the trusted publishing placeholder in RELEASING.md,
+          # and 0.0.0-stage) are placeholders with no snippet.
+          for VERSION in $(node -p "[].concat(JSON.parse(process.argv[1])).filter(v => !v.startsWith('0.0.0-')).join(' ')" "$VERSIONS"); do
             echo "::group::@manalens/web@$VERSION"
             packages/web/scripts/generate-sri.sh --version "$VERSION" --check-registry --check-cdn --attempts 3 --interval 20 >/dev/null
             echo "::endgroup::"
