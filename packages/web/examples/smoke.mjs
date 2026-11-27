@@ -1771,7 +1771,7 @@ test('game mode: uncaught errors and unhandled rejections become error events wi
     assert.equal(uncaught.properties.message, 'Cannot load https://cdn.example.com/save.json for [email]');
     assert.equal(uncaught.properties.error_type, 'TypeError');
     assert.equal(uncaught.properties.handled, false);
-    assert.equal(uncaught.properties.source, 'web_window');
+    assert.equal(uncaught.properties.source, 'auto');
     assert.equal(uncaught.properties.file, '/assets/index.js');
     assert.equal(uncaught.properties.line, 10);
     assert.equal(uncaught.properties.function, 'Player.jump');
@@ -1780,6 +1780,8 @@ test('game mode: uncaught errors and unhandled rejections become error events wi
     assert.ok(!JSON.stringify(uncaught).includes('anna') && !JSON.stringify(uncaught).includes('token=abc') && !uncaught.properties.stack.includes('?v=2'));
     assert.match(uncaught.session_id, uuid);
     assert.equal(rejected.properties.error_type, 'unhandledrejection');
+    assert.equal(rejected.properties.source, 'auto');
+    assert.equal(rejected.properties.handled, false);
     assert.equal(rejected.properties.message, 'Save failed for slot "three" 42');
     assert.equal(rejected.properties.file, undefined);
     assert.equal(rejected.properties.fingerprint, errorFingerprint('unhandledrejection', 'Save failed for slot "x" 7', '', ''), 'grouped by the message without numbers and quoted text');

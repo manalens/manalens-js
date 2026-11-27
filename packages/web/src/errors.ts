@@ -183,7 +183,8 @@ export interface ErrorInput {
   severity: ErrorSeverity;
   errorType: string;
   handled: boolean;
-  source: 'manual' | 'web_window';
+  /** `manual`: trackError(). `auto`: any automatic capture (window errors, unhandled rejections). */
+  source: 'manual' | 'auto';
   fingerprint?: string;
   file?: string;
   line?: number;

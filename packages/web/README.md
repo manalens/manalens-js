@@ -433,7 +433,7 @@ Snippet: `data-app-platform` (required for the others to apply),
 
 With `game: true` the SDK sends `game_open`, `session_start`, `session_end`
 and `error` for you; see [Game mode](#game-mode). For the other standard game
-events (`app_unclean_exit`, `game_updated`), see the analytics docs
+events (`app_crash`, `game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
 
 ### Game mode
@@ -457,7 +457,7 @@ them:
 | `session_start` | none | Before `game_open`, and before the first event of each new session |
 | `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
 | `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
-| `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack` when known | A window `error` or `unhandledrejection` (`source: "web_window"`, `handled: false`), or `trackError()` (`source: "manual"`) |
+| `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
 
 - **Sessions** use the web session rules above (30 minutes idle, 24 hours at
   most), with no second clock. Each start is a new session. While the page is
@@ -470,7 +470,7 @@ them:
   nothing is stored before. `setConsent(false)` and `optOut()` delete the
   first open. `reset()` sends `session_end` with the old identity; the next
   event starts a new session.
-- `app_unclean_exit` is not sent: a browser cannot tell a crash from a close.
+- `app_crash` is not sent: a browser cannot tell a crash from a close.
   In Electron, send it from the main process with `@manalens/node`.
 
 ### Errors
