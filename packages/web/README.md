@@ -512,10 +512,14 @@ them:
   browser closed in the background is not a crash. Several tabs of the same
   game each have their own entry: an entry written in the last 20 seconds can
   be a tab that is still open, so the SDK looks at it again 20 seconds later
-  and sends `app_crash` only when it was not written since. In consent mode,
-  nothing is saved before `setConsent(true)`.
+  and sends `app_crash` only when it was not written since. `app_crash` goes
+  with the anonymous ID and user ID of the session that crashed, and only when
+  that anonymous ID is still the current one: after `reset()` or a new
+  identity, the old crash is dropped. In consent mode, nothing is saved before
+  `setConsent(true)`.
 - **Breadcrumbs:** each `error` has `breadcrumbs`, the names of the last 20
-  `track` events (not `error` events and not page views), oldest first,
+  `track` events (not `error` events and not page views; none from before
+  consent or from an excluded page), oldest first,
   joined with commas, as in the game SDKs. The string is cut to its last 1024
   characters: the collector refuses an event with a longer property string.
   `reset()`, `setConsent(false)` and `optOut()` clear the breadcrumbs, so the

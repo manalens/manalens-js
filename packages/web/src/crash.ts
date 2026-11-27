@@ -23,6 +23,9 @@ const MAX_TABS = 10;
 export interface TabEntry {
   /** The game session of the tab. */
   session_id: string;
+  /** The identity of the session: app_crash is sent only for this anonymous ID, with this user ID. */
+  anonymous_id: string;
+  user_id?: string;
   /** The last write (ms since the epoch). */
   at: number;
   /** The page was visible and had focus at the last write. */
@@ -45,9 +48,11 @@ export function readTabs(key: string): TabEntries {
   const tabs: TabEntries = {};
   for (const [tab, value] of Object.entries(parsed as Record<string, unknown>)) {
     const entry = value as Partial<TabEntry> | null;
-    if (!id(tab) || !entry || typeof entry !== 'object' || !id(entry.session_id) || typeof entry.at !== 'number' || !Number.isFinite(entry.at)) continue;
+    if (!id(tab) || !entry || typeof entry !== 'object' || !id(entry.session_id) || !id(entry.anonymous_id) || typeof entry.at !== 'number' || !Number.isFinite(entry.at)) continue;
     tabs[tab] = {
       session_id: entry.session_id!,
+      anonymous_id: entry.anonymous_id!,
+      ...(typeof entry.user_id === 'string' && entry.user_id && entry.user_id.length <= 255 ? { user_id: entry.user_id } : {}),
       at: entry.at,
       focused: entry.focused === true,
       ...(typeof entry.build === 'string' && entry.build ? { build: entry.build.slice(0, 64) } : {}),

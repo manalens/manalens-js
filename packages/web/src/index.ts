@@ -475,6 +475,8 @@ export class Analytics {
    */
   setConsent(granted: boolean): void {
     if (!granted) this.identityGeneration++;
+    // Nothing from before consent reaches a later error.
+    if (granted && !this.identityAllowed()) this.breadcrumbs = [];
     this.consent = granted;
     if (typeof window === 'undefined' || this.options.disabled) return;
     if (granted) {
@@ -509,6 +511,8 @@ export class Analytics {
     if (this.gameSession && this.active() && this.identityAllowed()) this.endGameSession(Date.now());
     this.gameSession = undefined;
     this.removeSavedTab();
+    if (this.crashRecheck) clearTimeout(this.crashRecheck);
+    this.crashRecheck = undefined;
     this.errorLimits.clear();
     this.breadcrumbs = [];
     this.identityGeneration++;
@@ -686,7 +690,8 @@ export class Analytics {
 
   private push(payload: AnalyticsEvent): void {
     this.pending.push(payload);
-    if (this.game && payload.type === 'track' && payload.event && payload.event !== 'error') {
+    // Only events with an identity: no breadcrumbs before consent or on an excluded page.
+    if (this.game && payload.type === 'track' && payload.event && payload.event !== 'error' && this.identityAllowed() && !this.pageExcluded()) {
       this.breadcrumbs.push(payload.event);
       if (this.breadcrumbs.length > BREADCRUMBS) this.breadcrumbs.shift();
     }
@@ -796,6 +801,8 @@ export class Analytics {
     this.tabId ??= randomId();
     const entry: TabEntry = {
       session_id: session.id,
+      anonymous_id: generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies),
+      ...(this.userId ? { user_id: this.userId } : {}),
       at: now,
       focused: this.pageFocused(),
       ...(this.app?.build ? { build: this.app.build } : {}),
@@ -821,19 +828,23 @@ export class Analytics {
     for (const entry of crashed) this.sendCrash(entry);
     if (!Object.keys(fresh).length) return;
     if (this.crashRecheck) clearTimeout(this.crashRecheck);
+    // reset(), a consent change or an opt-out before the second look: nothing is sent.
+    const generation = this.identityGeneration;
     this.crashRecheck = setTimeout(() => {
       this.crashRecheck = undefined;
-      if (!this.game || !this.active() || this.closing || !this.identityAllowed() || this.pageExcluded()) return;
+      if (generation !== this.identityGeneration || !this.game || !this.active() || this.closing || !this.identityAllowed() || this.pageExcluded()) return;
       for (const entry of takeStillSilent(this.keys.gameState, fresh)) this.sendCrash(entry);
     }, CRASH_ALIVE_MS);
   }
 
   /** `app_crash` in the session that crashed, at its last saved time, as the game SDKs send it. */
   private sendCrash(entry: TabEntry): void {
+    // Only for the identity of that session: after reset() or a new identity, the old crash is dropped.
+    if (entry.anonymous_id !== generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies)) { this.logger.log('debug', 'app_crash of another identity dropped'); return; }
     const properties: AnalyticsEvent['properties'] = { previous_session_id: entry.session_id };
     if (entry.build) properties.previous_build = entry.build;
     if (entry.app_version) properties.previous_app_version = entry.app_version;
-    const ids = { anonymous_id: generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies), session_id: entry.session_id, ...(this.userId ? { user_id: this.userId } : {}) };
+    const ids = { anonymous_id: entry.anonymous_id, session_id: entry.session_id, ...(entry.user_id ? { user_id: entry.user_id } : {}) };
     this.logger.log('info', 'The last game session did not end cleanly: app_crash');
     this.push(this.build('track', 'app_crash', properties, new Date(entry.at).toISOString(), ids));
   }
