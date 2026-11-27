@@ -8,7 +8,7 @@ install scripts in either package). `.github/workflows/security.yml` runs
 `pnpm audit` and zizmor.
 
 On 2026-11-27 (local run): `pnpm install --frozen-lockfile`, `pnpm typecheck`,
-and `pnpm build` passed, and `pnpm test` passed 4 repository script tests, 128
+and `pnpm build` passed, and `pnpm test` passed 4 repository script tests, 135
 web tests, and 43 Node SDK tests. On 2026-11-26: `npm publish --dry-run` passed for both packed tarballs,
 and the packed `@manalens/node` loads with `require` and `import`.
 
@@ -34,7 +34,7 @@ goes alone without keepalive), `shutdown()` (game mode: `session_end` with
 resolves within `timeoutMs` when the network hangs and the unsent events stay
 stored; without game mode it only sends the queue; the snippet instance has
 it), and lifecycle cleanup.
-Game mode (`game: true`, P-2800): `session_start` and `game_open` on each start, the stored first open (and the key of the old setup snippet), `session_end` on `pagehide`, `reset()` and after 30 minutes idle, the flush timer that keeps a visible and focused session alive, consent mode, captured window errors and unhandled rejections without personal data, `trackError()`, the fingerprint of the game SDKs (checked against two Unity fixture fingerprints), the error limits and `errors_dropped`, the property limits, a 1 MB message and stack (cut to 4096 characters before any regular expression runs), `data-game`, and game mode off without a valid `app`. Persistent queue (`persistQueue`, G-2526): replay on the next load in order with the same `message_id` (localStorage and a small IndexedDB stand-in), removal only after the collector accepts, the 1000-event and 7-day caps, and consent and `optOut()` (nothing written, stored events deleted).
+Game mode (`game: true`, P-2800): `session_start` and `game_open` on each start, the stored first open (and the key of the old setup snippet), `session_end` on `pagehide`, `reset()` and after 30 minutes idle, the flush timer that keeps a visible and focused session alive, consent mode, captured window errors and unhandled rejections without personal data, `trackError()`, the fingerprint of the game SDKs (checked against two Unity fixture fingerprints), the error limits and `errors_dropped`, the property limits, a 1 MB message and stack (cut to 4096 characters before any regular expression runs), `data-game`, game mode off without a valid `app`, `app_crash` at the next load (P-2835: a focused tab that closed without `pagehide`, in the old session with `previous_session_id`, `previous_build` and `previous_app_version`; none after `pagehide`, `shutdown()`, `destroy()`, or for a hidden or unfocused tab; a second look after 20 s for an entry that can be an open tab; one entry per tab; nothing saved before consent or in website mode; deleted by `setConsent(false)` and `optOut()`), and the breadcrumbs of errors (the last 20 `track` names without errors and page views, cut to the last 1024 characters, cleared by `reset()` and `setConsent(false)`). Persistent queue (`persistQueue`, G-2526): replay on the next load in order with the same `message_id` (localStorage and a small IndexedDB stand-in), removal only after the collector accepts, the 1000-event and 7-day caps, and consent and `optOut()` (nothing written, stored events deleted).
 
 ```sh
 pnpm --filter @manalens/web typecheck

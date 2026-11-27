@@ -70,6 +70,7 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
 | `first-open` | localStorage, else memory | Until `optOut()` or `setConsent(false)` | Game mode only: the time of the first `game_open` |
+| `game-state` | localStorage | While a game session is open; removed on `pagehide`, `shutdown()`, `destroy()`, `reset()`, `optOut()` and `setConsent(false)` | Game mode only: one entry per open tab (session ID, last write time, focus, build, version), for `app_crash` |
 | `queue` | IndexedDB, else localStorage | Until the collector accepts the events; at most 1000 events and 7 days | `persistQueue` only: unsent events |
 
 Like Formo, cookies are scoped to the apex domain (`.example.com`) by default
@@ -460,9 +461,9 @@ plain web events. The SDK sends a copy: later changes to the object do nothing.
 Snippet: `data-app-platform` (required for the others to apply),
 `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`.
 
-With `game: true` the SDK sends `game_open`, `session_start`, `session_end`
-and `error` for you; see [Game mode](#game-mode). For the other standard game
-events (`app_crash`, `game_updated`), see the analytics docs
+With `game: true` the SDK sends `game_open`, `session_start`, `session_end`,
+`error` and `app_crash` for you; see [Game mode](#game-mode). For the other
+standard game events (`game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
 
 ### Game mode
@@ -486,7 +487,8 @@ them:
 | `session_start` | none | Before `game_open`, and before the first event of each new session |
 | `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
 | `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `shutdown()`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
-| `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
+| `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack`, `breadcrumbs` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
+| `app_crash` | `previous_session_id`, and `previous_build`, `previous_app_version` when the `app` option has them | At the next load, when a tab of the game closed without `pagehide` (for example a tab that ran out of memory) while it was visible and had focus. It is sent in the session that crashed, with the time of its last saved state |
 
 - **Sessions** use the web session rules above (30 minutes idle, 24 hours at
   most), with no second clock. Each start is a new session. While the page is
@@ -499,8 +501,25 @@ them:
   nothing is stored before. `setConsent(false)` and `optOut()` delete the
   first open. `reset()` sends `session_end` with the old identity; the next
   event starts a new session.
-- `app_crash` is not sent: a browser cannot tell a crash from a close.
-  In Electron, send it from the main process with `@manalens/node`.
+- **Crashes:** while a game session is open, each tab keeps an entry in
+  localStorage (key `game-state`): its session ID, whether the page is visible
+  and has focus, and the time. It writes the entry every 5 seconds and on
+  `focus`, `blur` and visibility changes. `pagehide` (a close, a reload or a
+  navigation), `shutdown()`, `destroy()` and `reset()` remove it, so a normal
+  close is never a crash. An entry that is still there at the next load, of a
+  tab that was visible and had focus, gives `app_crash`, as the game SDKs do
+  ("only when the last saved session was open and focused"). A tab that the
+  browser closed in the background is not a crash. Several tabs of the same
+  game each have their own entry: an entry written in the last 20 seconds can
+  be a tab that is still open, so the SDK looks at it again 20 seconds later
+  and sends `app_crash` only when it was not written since. In consent mode,
+  nothing is saved before `setConsent(true)`.
+- **Breadcrumbs:** each `error` has `breadcrumbs`, the names of the last 20
+  `track` events (not `error` events and not page views), oldest first,
+  joined with commas, as in the game SDKs. The string is cut to its last 1024
+  characters: the collector refuses an event with a longer property string.
+  `reset()`, `setConsent(false)` and `optOut()` clear the breadcrumbs, so the
+  event names of the old player never reach a later error.
 
 ### Quit an Electron game
 

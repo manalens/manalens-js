@@ -34,6 +34,13 @@ export const MAX_AUTO_ERRORS_PER_SESSION = 50;
 export const MAX_STRING = 1024;
 export const MAX_PROPERTY_KEYS = 50;
 export const MAX_PROPERTY_BYTES = 8 * 1024;
+/**
+ * Game mode: an error carries `breadcrumbs`, the names of the last 20
+ * `track` events (not `error`), oldest first, joined with commas, at most
+ * MAX_STRING characters (the end is kept). The format of the game SDKs. The
+ * collector refuses the whole event for a property string over 1024 characters.
+ */
+export const BREADCRUMBS = 20;
 
 const left = (value: string, max: number) => value.length > max ? value.slice(0, max) : value;
 
@@ -190,6 +197,8 @@ export interface ErrorInput {
   line?: number;
   fn?: string;
   stack?: string;
+  /** Game mode: the names of the last tracked events, comma-separated (see BREADCRUMBS). */
+  breadcrumbs?: string;
   properties?: ErrorProperties;
 }
 
@@ -211,6 +220,8 @@ export function errorProperties(input: ErrorInput): ErrorProperties {
   if (fn) props.function = fn;
   const stack = (input.stack ?? '').trim();
   if (stack) props.stack = left(stack, MAX_STRING);
+  // The newest names are at the end, so a cut keeps the end.
+  if (input.breadcrumbs) props.breadcrumbs = input.breadcrumbs.length > MAX_STRING ? input.breadcrumbs.slice(-MAX_STRING) : input.breadcrumbs;
   for (const [key, value] of Object.entries(input.properties ?? {})) {
     if (!key || key.length > 100 || key in props) continue;
     if (value === null || typeof value === 'boolean' || typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) props[key] = typeof value === 'string' ? left(value, MAX_STRING) : value;

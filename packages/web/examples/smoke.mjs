@@ -1872,7 +1872,8 @@ test('game mode: uncaught errors and unhandled rejections become error events wi
     window.dispatchEvent(crossOrigin);
     await sdk.flush();
     const [uncaught, rejected, script] = named(eventsOf(sent), 'error');
-    assert.deepEqual(Object.keys(uncaught.properties), ['severity', 'message', 'handled', 'source', 'fingerprint', 'error_type', 'file', 'line', 'function', 'stack']);
+    assert.deepEqual(Object.keys(uncaught.properties), ['severity', 'message', 'handled', 'source', 'fingerprint', 'error_type', 'file', 'line', 'function', 'stack', 'breadcrumbs']);
+    assert.equal(uncaught.properties.breadcrumbs, 'session_start,game_open');
     assert.equal(uncaught.properties.severity, 'error');
     assert.equal(uncaught.properties.message, 'Cannot load https://cdn.example.com/save.json for [email]');
     assert.equal(uncaught.properties.error_type, 'TypeError');
@@ -1954,7 +1955,7 @@ test('trackError(): handled errors with source manual; an Error gives type, stac
     sdk.trackError('Too many properties', { properties: big });
     await sdk.flush();
     const [manual, fromError, custom, limited] = named(eventsOf(sent), 'error');
-    assert.deepEqual(manual.properties, { severity: 'critical', message: 'Save failed for slot 3', handled: false, source: 'manual', fingerprint: '38d0e3d0139dea87', error_type: 'SaveFailed', slot: 3 });
+    assert.deepEqual(manual.properties, { severity: 'critical', message: 'Save failed for slot 3', handled: false, source: 'manual', fingerprint: '38d0e3d0139dea87', error_type: 'SaveFailed', breadcrumbs: 'session_start,game_open', slot: 3 });
     assert.equal(fromError.properties.handled, true, 'trackError() defaults to handled: true');
     assert.equal(fromError.properties.error_type, 'RangeError');
     assert.equal(fromError.properties.file, '/js/game.js');
@@ -2025,6 +2026,190 @@ test('game mode: reset() ends the session with the old identity; the next event 
     assert.equal(identify.user_id, 'player_1');
     assert.notEqual(next.anonymous_id, start.anonymous_id); assert.equal(next.user_id, undefined);
     assert.equal(after.session_id, next.session_id);
+  } finally { sdk.destroy(); }
+});
+
+// P-2835: app_crash at the next load and breadcrumbs, as in the game SDKs.
+const gameStateKey = local => [...local.stored.keys()].find(name => name.endsWith('_game-state'));
+const gameState = local => { const key = gameStateKey(local); return key ? JSON.parse(local.stored.get(key)) : {}; };
+/** A tab that crashes: its storage stays as it was, with no pagehide. */
+const crash = (sdk, local) => { const snapshot = new Map(local.stored); sdk.destroy(); local.stored.clear(); for (const [key, value] of snapshot) local.stored.set(key, value); };
+
+test('game mode: a tab that crashed with focus sends app_crash at the next load; a normal close does not (P-2835)', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const local = memoryStorage();
+  const { document } = browser('https://game.example/', { local });
+  document.visibilityState = 'visible'; document.hasFocus = () => true;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const first = new Analytics(gameOptions({ persistQueue: false }));
+  await first.flush();
+  const [open] = named(eventsOf(sent), 'game_open');
+  const entries = Object.values(gameState(local));
+  assert.equal(entries.length, 1, 'one entry for the open game session');
+  assert.deepEqual(entries[0], { session_id: open.session_id, at: Date.parse('2026-01-01T10:00:00Z'), focused: true, build: '571', app_version: '1.4.0' });
+  // The tab crashes (out of memory): no pagehide. The player opens the game again.
+  t.mock.timers.tick(60_000);
+  crash(first, local);
+  sent.length = 0;
+  const second = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    await second.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(tracked(events), ['app_crash', 'session_start', 'game_open']);
+    const [appCrash, start] = events;
+    assert.deepEqual(appCrash.properties, { previous_session_id: open.session_id, previous_build: '571', previous_app_version: '1.4.0' });
+    assert.equal(appCrash.session_id, open.session_id, 'sent in the session that crashed');
+    assert.equal(appCrash.anonymous_id, open.anonymous_id);
+    assert.equal(appCrash.original_timestamp, '2026-01-01T10:00:00.000Z', 'at the last saved time');
+    assert.notEqual(start.session_id, open.session_id);
+    assert.deepEqual(Object.values(gameState(local)).map(entry => entry.session_id), [start.session_id], 'the old entry is gone');
+    // A normal close (pagehide) removes the entry: the next load sends no app_crash.
+    globalThis.window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(gameStateKey(local), undefined);
+  } finally { second.destroy(); }
+  sent.length = 0;
+  t.mock.timers.tick(60_000);
+  const third = new Analytics(gameOptions({ persistQueue: false }));
+  try { await third.flush(); assert.deepEqual(tracked(eventsOf(sent)), ['session_start', 'game_open']); } finally { third.destroy(); }
+});
+
+test('game mode: no app_crash after shutdown() or destroy(), or when the tab was hidden or had no focus', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const cases = [
+    ['hidden', document => { document.visibilityState = 'hidden'; }, sdk => sdk],
+    ['no focus', document => { document.hasFocus = () => false; }, sdk => sdk],
+    ['blur after the start', document => { let focused = true; document.hasFocus = () => focused; return () => { focused = false; globalThis.window.dispatchEvent(new Event('blur')); }; }, sdk => sdk],
+    ['shutdown()', () => {}, sdk => sdk, true],
+  ];
+  for (const [name, setup, , quit] of cases) {
+    const local = memoryStorage();
+    const { document } = browser('https://game.example/', { local });
+    document.visibilityState = 'visible'; document.hasFocus = () => true;
+    const after = setup(document);
+    const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    const first = new Analytics(gameOptions({ persistQueue: false }));
+    await first.flush();
+    if (typeof after === 'function') after();
+    t.mock.timers.tick(60_000);
+    if (quit) { await first.shutdown(); assert.equal(gameStateKey(local), undefined, `${name}: entry removed`); } else crash(first, local);
+    sent.length = 0;
+    document.visibilityState = 'visible'; document.hasFocus = () => true;
+    const next = new Analytics(gameOptions({ persistQueue: false }));
+    try { await next.flush(); assert.equal(named(eventsOf(sent), 'app_crash').length, 0, name); } finally { next.destroy(); }
+  }
+  // destroy() is a stop by the game too.
+  const local = memoryStorage();
+  browser('https://game.example/', { local });
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  await sdk.flush();
+  assert.ok(gameStateKey(local));
+  sdk.destroy();
+  assert.equal(gameStateKey(local), undefined);
+});
+
+test('game mode: a focused entry newer than 20 s can be an open tab: app_crash only when it is not written again', async t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const local = memoryStorage();
+  const { document } = browser('https://game.example/', { local });
+  document.visibilityState = 'visible'; document.hasFocus = () => true;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  // The player reloads 5 s after a crash.
+  const crashed = new Analytics(gameOptions({ persistQueue: false }));
+  crashed.track('level_start');
+  const crashedSession = crashed.getSessionId();
+  t.mock.timers.tick(5000);
+  crash(crashed, local);
+  const reloaded = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    assert.equal(named(reloaded.pending, 'app_crash').length, 0, 'not yet: the tab could still be open');
+    t.mock.timers.tick(20_000);
+    const [appCrash] = named(reloaded.pending, 'app_crash');
+    assert.equal(appCrash?.properties.previous_session_id, crashedSession);
+  } finally { reloaded.destroy(); }
+
+  // A second tab opens in the background while the first one is open and focused: no app_crash.
+  local.stored.clear();
+  const playing = new Analytics(gameOptions({ persistQueue: false }));
+  t.mock.timers.tick(2000);
+  const background = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    for (let i = 0; i < 12; i++) t.mock.timers.tick(5000);
+    assert.equal(named(background.pending, 'app_crash').length, 0);
+    assert.equal(Object.keys(gameState(local)).length, 2, 'one entry per tab');
+  } finally { playing.destroy(); background.destroy(); }
+});
+
+test('game mode: nothing saved for crashes before consent; consent withdrawal and optOut() delete it; websites save nothing', async t => {
+  const local = memoryStorage();
+  browser('https://game.example/', { local });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ requireConsent: true, persistQueue: false }));
+  try {
+    sdk.track('menu');
+    assert.equal(gameStateKey(local), undefined, 'nothing before consent');
+    sdk.setConsent(true);
+    assert.ok(gameStateKey(local));
+    sdk.setConsent(false);
+    assert.equal(gameStateKey(local), undefined, 'deleted on withdrawal');
+    sdk.setConsent(true);
+    assert.ok(gameStateKey(local));
+    sdk.optOut();
+    assert.equal(gameStateKey(local), undefined, 'deleted on optOut()');
+  } finally { sdk.destroy(); sdk.optIn(); }
+  // Website mode (no game option), also with an app option: no saved state and no breadcrumbs.
+  const web = new Analytics({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: gameApp });
+  try {
+    web.track('clicked');
+    web.trackError('boom');
+    await web.flush();
+    assert.equal(gameStateKey(local), undefined);
+    const [error] = named(eventsOf(sent), 'error');
+    assert.equal(error.properties.breadcrumbs, undefined);
+  } finally { web.destroy(); }
+});
+
+test('breadcrumbs: the last 20 track event names (not errors, not page views), at most 1024 characters, the end kept', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false, batchSize: 50 }));
+  try {
+    sdk.page();
+    for (let i = 1; i <= 25; i++) sdk.track(`step_${i}`);
+    sdk.trackError('first');
+    sdk.trackError('second', { properties: { breadcrumbs: 'mine' } });
+    await sdk.flush();
+    const [first, second] = named(eventsOf(sent), 'error');
+    const expected = Array.from({ length: 20 }, (_, i) => `step_${i + 6}`).join(',');
+    assert.equal(first.properties.breadcrumbs, expected, 'session_start, game_open and step_1 to step_5 dropped out');
+    assert.equal(second.properties.breadcrumbs, expected, 'errors are not breadcrumbs; the SDK value wins over a custom one');
+    // Long names: the string is cut to 1024 characters and keeps the newest names.
+    for (let i = 0; i < 20; i++) sdk.track(`${String(i).padStart(2, '0')}_${'n'.repeat(120)}`);
+    sdk.trackError('long');
+    await sdk.flush();
+    const long = named(eventsOf(sent), 'error')[2].properties.breadcrumbs;
+    assert.equal(long.length, 1024);
+    assert.ok(long.endsWith(`19_${'n'.repeat(120)}`));
+  } finally { sdk.destroy(); }
+});
+
+test('breadcrumbs: reset() and setConsent(false) clear them, as in the game SDKs', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    sdk.track('old_player_event');
+    sdk.reset();
+    sdk.trackError('after reset');
+    sdk.setConsent(false);
+    sdk.trackError('no consent');
+    sdk.setConsent(true);
+    sdk.trackError('after consent');
+    await sdk.flush();
+    const [afterReset, noConsent, afterConsent] = named(eventsOf(sent), 'error');
+    assert.equal(afterReset.properties.breadcrumbs, 'session_start', 'the old names are gone; the new session is in');
+    assert.equal(noConsent.properties.breadcrumbs, undefined);
+    assert.equal(afterConsent.properties.breadcrumbs, 'session_start,game_open');
   } finally { sdk.destroy(); }
 });
 

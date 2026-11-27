@@ -2,7 +2,8 @@ import { pageContext } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, randomId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
 import { readLocal, removeLocal, storageKey, writeLocal } from './storage';
-import { cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
+import { BREADCRUMBS, cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
+import { CRASH_ALIVE_MS, CRASH_HEARTBEAT_MS, removeTab, takeCrashed, takeStillSilent, writeTab, type TabEntry } from './crash';
 import { PersistentQueue } from './queue';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
 import { Logger } from './logger';
@@ -156,7 +157,7 @@ export class Analytics {
   private warnedProtectedTraits = false;
   /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
-  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string; firstOpen: string };
+  private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string; firstOpen: string; gameState: string };
   /** Game mode (P-2800): game_open, sessions and errors. Only with a valid app option. */
   private readonly game: boolean;
   /** The persistent queue (G-2526), or undefined when it is off. */
@@ -171,6 +172,18 @@ export class Analytics {
   /** First open when localStorage is not available: page memory only. */
   private firstOpenMemory?: string;
   private readonly errorLimits = new ErrorLimiter();
+  /** Game mode: the names of the last BREADCRUMBS track events (not `error`), oldest first. */
+  private breadcrumbs: string[] = [];
+  /** Game mode: this tab's key in the saved session state (P-2835), made on the first write. */
+  private tabId?: string;
+  /** This tab has an entry in the saved session state. */
+  private tabSaved = false;
+  /** Writes this tab's entry every CRASH_HEARTBEAT_MS. */
+  private heartbeat?: ReturnType<typeof setInterval>;
+  /** A second look at the entries of other tabs that could still be open. */
+  private crashRecheck?: ReturnType<typeof setTimeout>;
+  /** focus, blur and visibility changes: the saved state says whether the game had focus. */
+  private readonly onFocusChange = () => { this.saveTab(); };
   private readonly onWindowError = (event: Event) => { try { this.captureWindowError(event as ErrorEvent); } catch { /* Never throw from the error handler. */ } };
   private readonly onRejection = (event: Event) => { try { this.captureRejection(event as PromiseRejectionEvent); } catch { /* Never throw from the error handler. */ } };
   private acquisition?: AnalyticsEvent['context'];
@@ -180,6 +193,7 @@ export class Analytics {
   private pendingPage?: { kind: 'popstate' | 'history'; timer: ReturnType<typeof setTimeout>; send: () => void };
   private readonly onPageHide = () => { this.sendPendingPage(); this.endGameOnPageHide(); void this.flush(true); };
   private readonly onVisibilityChange = () => {
+    this.saveTab();
     if (document.visibilityState === 'hidden') { this.sendPendingPage(); void this.flush(true); }
   };
   /** `manalens:navigate`: the app says the new page is ready, so send at once. */
@@ -256,7 +270,7 @@ export class Analytics {
       maxQueueSize: clamp(options.maxQueueSize, MIN_QUEUE_BYTES, MAX_QUEUE_BYTES, MAX_QUEUE_BYTES),
     };
     const key = (name: string) => storageKey(this.options.publishableKey, name);
-    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out'), firstOpen: key('first-open') };
+    this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out'), firstOpen: key('first-open'), gameState: key('game-state') };
     if (persistQueue === true && this.app) this.persist = new PersistentQueue(key('queue'));
     this.start();
     if (options.ready) {
@@ -290,6 +304,9 @@ export class Analytics {
     if (this.game) {
       window.addEventListener('error', this.onWindowError);
       window.addEventListener('unhandledrejection', this.onRejection);
+      window.addEventListener('focus', this.onFocusChange);
+      window.addEventListener('blur', this.onFocusChange);
+      this.heartbeat = setInterval(() => this.saveTab(), CRASH_HEARTBEAT_MS);
       this.startGame();
     }
     this.sendHandoff();
@@ -491,7 +508,9 @@ export class Analytics {
     // Game mode: the old session ends first, with its identity and errors_dropped.
     if (this.gameSession && this.active() && this.identityAllowed()) this.endGameSession(Date.now());
     this.gameSession = undefined;
+    this.removeSavedTab();
     this.errorLimits.clear();
+    this.breadcrumbs = [];
     this.identityGeneration++;
     this.userId = undefined;
     this.deferredIdentify = undefined;
@@ -607,9 +626,14 @@ export class Analytics {
     return { ...context, ...carried, referrer: this.acquisition.referrer };
   }
 
-  private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): void {
-    if (!this.active() || this.closing) return;
-    if (this.pageExcluded()) { this.logger.log('debug', `Not sent: ${type} on an excluded host or path`); return; }
+  /**
+   * Queue an event. `properties` can be a function, called after the
+   * identity: an error then has the breadcrumbs of a session_start that this
+   * event starts. Returns the queued event, or undefined when nothing was queued.
+   */
+  private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] | (() => AnalyticsEvent['properties']) = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): AnalyticsEvent | undefined {
+    if (!this.active() || this.closing) return undefined;
+    if (this.pageExcluded()) { this.logger.log('debug', `Not sent: ${type} on an excluded host or path`); return undefined; }
     // An identify held back on an excluded page goes out first, on this allowed page.
     if (type !== 'identify' && this.deferredIdentify && this.userId && this.identityAllowed()) {
       const held = this.deferredIdentify;
@@ -621,7 +645,9 @@ export class Analytics {
     if (type !== 'identify' && type !== 'traits') this.sendHeldTraits();
     const at = Date.parse(originalTimestamp);
     const identity = this.identityAllowed() ? this.identity(Number.isFinite(at) ? at : Date.now()) : undefined;
-    this.push(this.build(type, event, properties, originalTimestamp, identity, context, traits));
+    const payload = this.build(type, event, typeof properties === 'function' ? properties() : properties, originalTimestamp, identity, context, traits);
+    this.push(payload);
+    return payload;
   }
 
   /** The identity of a new event. In game mode, a new session ID first ends the old game session and starts a new one. */
@@ -637,6 +663,7 @@ export class Analytics {
         this.gameSession = { id: session.id, startedAt: session.startedAt, lastAt: now };
         this.errorLimits.newSession();
         this.push(this.build('track', 'session_start', {}, new Date(now).toISOString(), ids));
+        this.saveTab(now);
       } else this.gameSession.lastAt = now;
     }
     return ids;
@@ -659,6 +686,10 @@ export class Analytics {
 
   private push(payload: AnalyticsEvent): void {
     this.pending.push(payload);
+    if (this.game && payload.type === 'track' && payload.event && payload.event !== 'error') {
+      this.breadcrumbs.push(payload.event);
+      if (this.breadcrumbs.length > BREADCRUMBS) this.breadcrumbs.shift();
+    }
     if (this.persistAllowed()) { this.restorePersisted(); this.persist!.put([payload]); }
     this.logger.log('debug', `Queued ${payload.type}${payload.event ? ` ${payload.event}` : ''}`);
     this.limitQueue();
@@ -678,6 +709,8 @@ export class Analytics {
 
   /** pagehide: the game session ends now; the next event (also after a back-forward cache restore) starts a new one. */
   private endGameOnPageHide(): void {
+    // A normal close, reload or navigation: not a crash.
+    this.removeSavedTab();
     if (!this.game || !this.gameSession || !this.active() || !this.identityAllowed()) return;
     this.endGameSession(Date.now());
     clearSessionId(this.keys.sessionId);
@@ -710,6 +743,7 @@ export class Analytics {
     // Each start is a new session, as in the game SDKs.
     clearSessionId(this.keys.sessionId);
     this.gameSession = undefined;
+    this.sendCrashes();
     const stored = this.readFirstOpen();
     const firstOpenAt = stored ?? new Date().toISOString();
     if (!stored) this.writeFirstOpen(firstOpenAt);
@@ -733,11 +767,75 @@ export class Analytics {
     this.gameSession = undefined;
     this.firstOpenMemory = undefined;
     this.errorLimits.clear();
+    this.breadcrumbs = [];
+    if (this.crashRecheck) clearTimeout(this.crashRecheck);
+    this.crashRecheck = undefined;
+    this.tabSaved = false;
     this.persistLoaded = false;
     this.restoring = undefined;
     if (typeof window === 'undefined' || this.options.disabled) return;
     removeLocal(this.keys.firstOpen);
+    removeLocal(this.keys.gameState);
     void this.persist?.clear();
+  }
+
+  /** The page is visible and has focus: the game SDKs count a crash only when the game had focus. */
+  private pageFocused(): boolean {
+    if (typeof document === 'undefined' || document.visibilityState === 'hidden') return false;
+    return typeof document.hasFocus !== 'function' || document.hasFocus();
+  }
+
+  /**
+   * Game mode: write this tab's entry in the saved session state while its
+   * game session is open (P-2835). pagehide, shutdown(), destroy() and
+   * reset() remove it; an entry left at the next load is a crash.
+   */
+  private saveTab(now = Date.now()): void {
+    const session = this.gameSession;
+    if (!this.game || !session || !this.active() || this.closing || !this.identityAllowed() || this.pageExcluded()) return;
+    this.tabId ??= randomId();
+    const entry: TabEntry = {
+      session_id: session.id,
+      at: now,
+      focused: this.pageFocused(),
+      ...(this.app?.build ? { build: this.app.build } : {}),
+      ...(this.app?.app_version ? { app_version: this.app.app_version } : {}),
+    };
+    writeTab(this.keys.gameState, this.tabId, entry);
+    this.tabSaved = true;
+  }
+
+  private removeSavedTab(): void {
+    if (!this.tabSaved || !this.tabId || typeof window === 'undefined' || this.options.disabled) return;
+    this.tabSaved = false;
+    removeTab(this.keys.gameState, this.tabId);
+  }
+
+  /**
+   * At the start: `app_crash` for each tab whose game session was open and
+   * focused and that did not close cleanly. A focused entry that is newer
+   * than CRASH_ALIVE_MS can be a tab that is still open: look again then.
+   */
+  private sendCrashes(): void {
+    const { crashed, fresh } = takeCrashed(this.keys.gameState, this.tabId ?? '', Date.now());
+    for (const entry of crashed) this.sendCrash(entry);
+    if (!Object.keys(fresh).length) return;
+    if (this.crashRecheck) clearTimeout(this.crashRecheck);
+    this.crashRecheck = setTimeout(() => {
+      this.crashRecheck = undefined;
+      if (!this.game || !this.active() || this.closing || !this.identityAllowed() || this.pageExcluded()) return;
+      for (const entry of takeStillSilent(this.keys.gameState, fresh)) this.sendCrash(entry);
+    }, CRASH_ALIVE_MS);
+  }
+
+  /** `app_crash` in the session that crashed, at its last saved time, as the game SDKs send it. */
+  private sendCrash(entry: TabEntry): void {
+    const properties: AnalyticsEvent['properties'] = { previous_session_id: entry.session_id };
+    if (entry.build) properties.previous_build = entry.build;
+    if (entry.app_version) properties.previous_app_version = entry.app_version;
+    const ids = { anonymous_id: generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies), session_id: entry.session_id, ...(this.userId ? { user_id: this.userId } : {}) };
+    this.logger.log('info', 'The last game session did not end cleanly: app_crash');
+    this.push(this.build('track', 'app_crash', properties, new Date(entry.at).toISOString(), ids));
   }
 
   private persistAllowed(): boolean {
@@ -788,10 +886,11 @@ export class Analytics {
     });
   }
 
-  private recordError(input: ErrorInput): void {
+  private recordError(input: ErrorInput): AnalyticsEvent | undefined {
     const properties = errorProperties(input);
-    if (!this.errorLimits.allow(String(properties.fingerprint), input.source)) { this.logger.log('debug', 'Error dropped by the error limits'); return; }
-    this.enqueue('track', 'error', properties);
+    if (!this.errorLimits.allow(String(properties.fingerprint), input.source)) { this.logger.log('debug', 'Error dropped by the error limits'); return undefined; }
+    // Game mode: the breadcrumbs are read after the identity, so they include a session_start that this error starts.
+    return this.enqueue('track', 'error', () => this.game && this.breadcrumbs.length ? errorProperties({ ...input, fingerprint: String(properties.fingerprint), breadcrumbs: this.breadcrumbs.join(',') }) : properties);
   }
 
   /** window `error`: an uncaught error. The message, stack and file lose personal data before they are queued. */
@@ -1080,6 +1179,11 @@ export class Analytics {
   destroy(): void {
     this.identityGeneration++;
     if (this.timer) clearInterval(this.timer);
+    if (this.heartbeat) clearInterval(this.heartbeat);
+    if (this.crashRecheck) clearTimeout(this.crashRecheck);
+    this.crashRecheck = undefined;
+    // A stop by the game (shutdown() or destroy()) is a clean end, not a crash.
+    this.removeSavedTab();
     this.cancelPendingPage();
     if (typeof window !== 'undefined') {
       window.removeEventListener(HISTORY_EVENT, this.onHistoryChange);
@@ -1089,6 +1193,8 @@ export class Analytics {
       window.removeEventListener('manalens:navigate', this.onNavigation);
       window.removeEventListener('error', this.onWindowError);
       window.removeEventListener('unhandledrejection', this.onRejection);
+      window.removeEventListener('focus', this.onFocusChange);
+      window.removeEventListener('blur', this.onFocusChange);
     }
     this.pending = [];
     this.attempts.clear();
