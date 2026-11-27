@@ -7,9 +7,9 @@ and `scripts/zero-dependencies.test.mjs` (no runtime dependencies and no
 install scripts in either package). `.github/workflows/security.yml` runs
 `pnpm audit` and zizmor.
 
-On 2026-11-26 (local run; GitHub Actions did not run): `pnpm install --frozen-lockfile`,
-`pnpm typecheck`, and `pnpm build` passed, and `pnpm test` passed 89 web tests
-and 31 Node SDK tests. `npm publish --dry-run` passed for both packed tarballs,
+On 2026-11-27 (local run): `pnpm install --frozen-lockfile`, `pnpm typecheck`,
+and `pnpm build` passed, and `pnpm test` passed 4 repository script tests, 128
+web tests, and 43 Node SDK tests. On 2026-11-26: `npm publish --dry-run` passed for both packed tarballs,
 and the packed `@manalens/node` loads with `require` and `import`.
 
 ## @manalens/web (packages/web)
@@ -24,7 +24,16 @@ failed in-flight batches after `reset()`, `setConsent(false)` (also then `true`)
 opt-out persistence before consent, sanitized
 URLs/referrers, route changes, retry identity, disabled tracking (no storage
 access) and validation, the `app` option and `data-app-*` attributes (valid,
-invalid and dropped with a warning), publishable key prefix checks, pagehide keepalive flush, and lifecycle cleanup.
+invalid and dropped with a warning), publishable key prefix checks, pagehide keepalive flush, the keepalive size
+limit (30 events of about 4 KB on `pagehide`: each body and all keepalive
+bodies in flight together at most 60000 bytes, measured as the UTF-8 bytes of
+the exact body; the rest stay queued and stored and go with the next normal
+send; a hidden page and `pagehide` share the budget; one event over the limit
+goes alone without keepalive), `shutdown()` (game mode: `session_end` with
+`duration_s`, sent with normal requests, then the instance is stopped; it
+resolves within `timeoutMs` when the network hangs and the unsent events stay
+stored; without game mode it only sends the queue; the snippet instance has
+it), and lifecycle cleanup.
 Game mode (`game: true`, P-2800): `session_start` and `game_open` on each start, the stored first open (and the key of the old setup snippet), `session_end` on `pagehide`, `reset()` and after 30 minutes idle, the flush timer that keeps a visible and focused session alive, consent mode, captured window errors and unhandled rejections without personal data, `trackError()`, the fingerprint of the game SDKs (checked against two Unity fixture fingerprints), the error limits and `errors_dropped`, the property limits, a 1 MB message and stack (cut to 4096 characters before any regular expression runs), `data-game`, and game mode off without a valid `app`. Persistent queue (`persistQueue`, G-2526): replay on the next load in order with the same `message_id` (localStorage and a small IndexedDB stand-in), removal only after the collector accepts, the 1000-event and 7-day caps, and consent and `optOut()` (nothing written, stored events deleted).
 
 ```sh

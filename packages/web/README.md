@@ -127,7 +127,18 @@ analytics.track('signup_completed', { plan: 'starter' });
 browser storage only with the `persistQueue` option (a game with `app`; see
 [Persistent queue](#persistent-queue)). After a failed send, the timer and full batches wait: 1 s, 2 s, 4 s ...
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
-A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
+A call to `flush()` sends at once. `pagehide`, and `visibilitychange` to
+hidden, send with `keepalive`.
+
+**Keepalive size.** Browsers refuse a `keepalive` request when its body, plus
+the bodies of the page's other `keepalive` requests still in flight, is over
+64 KiB. The send on `pagehide` (and on a hidden page) therefore keeps its
+`keepalive` request bodies to at most 60000 bytes (UTF-8 of the exact body)
+in flight together, in requests of at most `batchSize` events each. The events
+that do not fit stay queued (and stored with `persistQueue`) and go with the
+next send, or on the next load. One event whose body alone is over 60000
+bytes is sent alone with a normal request, without `keepalive`: it completes
+when the page is only hidden, and often also when it closes.
 
 **Batch too large (413).** The collector answers `413` when a batch is too
 large. The SDK keeps every event (same order, same `message_id`), halves the
@@ -258,7 +269,13 @@ createAnalytics({
 `traits(traits)`, `link({ provider: 'steam', ticket })`,
 `trackError(errorOrMessage, options?)`, `reset()`, `setConsent(granted)`,
 `optOut()`, `optIn()`, `isOptedOut()`, `getUserId()`, `getAnonymousId()`,
-`getSessionId()`, `flush(keepalive?)`, `destroy()`.
+`getSessionId()`, `flush(keepalive?)`, `shutdown(timeoutMs?)`, `destroy()`.
+
+| Method | Notes |
+| --- | --- |
+| `flush(keepalive?)` | Send one batch now (with `keepalive`: the queue, in requests of at most 60000 bytes together). Ignores the backoff wait. |
+| `shutdown(timeoutMs = 2000)` | End the game and stop. In game mode, ends the open session with `session_end` (`duration_s`). Then sends the queue with normal requests for at most `timeoutMs`, and stops like `destroy()`: later calls send nothing. Events not sent in time stay in the stored queue with `persistQueue`. Never rejects. See [Quit an Electron game](#quit-an-electron-game). |
+| `destroy()` | Stop at once: remove timers and listeners, and discard the events in memory. Stored events (`persistQueue`) stay. |
 
 ### Sessions
 
@@ -468,7 +485,7 @@ them:
 | --- | --- | --- |
 | `session_start` | none | Before `game_open`, and before the first event of each new session |
 | `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
-| `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
+| `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `shutdown()`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
 | `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
 
 - **Sessions** use the web session rules above (30 minutes idle, 24 hours at
@@ -484,6 +501,30 @@ them:
   event starts a new session.
 - `app_crash` is not sent: a browser cannot tell a crash from a close.
   In Electron, send it from the main process with `@manalens/node`.
+
+### Quit an Electron game
+
+A browser tab ends the session on `pagehide`. An Electron game that quits from
+its own menu should call `shutdown()` before it closes the window, as the game
+SDKs do on quit: `session_end`, then send for at most 2 seconds.
+
+```ts
+// Renderer: the quit button of the game.
+quitButton.addEventListener('click', async () => {
+  await analytics.shutdown(); // session_end, then send for at most 2 s
+  window.close();
+});
+```
+
+When the main process starts the quit (the window close button, `app.quit()`),
+send an IPC message to the renderer and let it call `shutdown()` before the
+window closes. `shutdown(timeoutMs = 2000)` never rejects. It sends with normal requests (not
+`keepalive`), so the requests are not limited to 64 KiB. Events that are not
+sent in time stay in the stored queue (`persistQueue`, on by default in game
+mode) and go on the next start. After `shutdown()` the instance is stopped,
+like the Node SDK after its `shutdown()`: later calls send nothing. Create a
+new instance to track again. Without game mode, `shutdown()` only sends the
+queue and stops. With the snippet, call `await window.manalens.shutdown()`.
 
 ### Errors
 

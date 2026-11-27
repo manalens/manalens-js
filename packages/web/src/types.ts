@@ -80,7 +80,13 @@ export interface AnalyticsOptions {
   autoPageviews?: boolean;
   /** Events per request, default 30, from 1 to 50 (the collector takes at most 50). A full batch sends at once, except during a backoff wait after a failed send. */
   batchSize?: number;
-  /** Send the queue every this many milliseconds, default 15000. The page hiding or closing sends one batch at once. */
+  /**
+   * Send the queue every this many milliseconds, default 15000. The page
+   * hiding or closing sends at once with keepalive requests, at most 60000
+   * bytes (UTF-8) of request bodies in flight together, as browsers refuse
+   * keepalive bodies over 64 KiB. Events that do not fit stay queued (and
+   * stored with persistQueue) for the next send.
+   */
   flushIntervalMs?: number;
   /**
    * How many times a batch is sent again after a server error (408, 429 or
@@ -128,7 +134,9 @@ export interface AnalyticsOptions {
    * `app` option: without one, game mode is off and a console warning says
    * why. The SDK then sends `game_open` on each start, `session_start` and
    * `session_end` (with `duration_s`), and an `error` event for each uncaught
-   * error and unhandled promise rejection. Websites leave it off.
+   * error and unhandled promise rejection. Websites leave it off. The session
+   * ends on `pagehide`; an Electron game calls `await analytics.shutdown()`
+   * before it quits.
    */
   game?: boolean;
   /**
@@ -136,7 +144,8 @@ export interface AnalyticsOptions {
    * send them on the next load: at most 1000 events, none older than 7 days.
    * Only with a valid `app` option. Default true in game mode, else false.
    * Nothing is written before consent in consent mode, and optOut() or
-   * setConsent(false) deletes the stored events.
+   * setConsent(false) deletes the stored events. Events that shutdown() could
+   * not send in its time stay stored.
    */
   persistQueue?: boolean;
 }

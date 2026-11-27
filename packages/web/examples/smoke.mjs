@@ -2189,3 +2189,135 @@ test('errors: key and token values are redacted across a newline and up to the c
     for (const message of [quoted, unclosed]) assert.ok(!message.includes('pass word') && !message.includes('word '), 'no part of the secret is left');
   } finally { sdk.destroy(); }
 });
+
+const utf8 = text => new TextEncoder().encode(text).byteLength;
+/** A fetch that records each request (exact body bytes, keepalive) and answers only when released. */
+function heldFetch() {
+  const requests = []; const waiting = [];
+  const fetch = async (_url, init) => {
+    requests.push({ bytes: utf8(init.body), keepalive: init.keepalive === true, events: JSON.parse(init.body).events });
+    return new Promise(resolve => waiting.push(() => resolve(response(202))));
+  };
+  return { requests, fetch, release() { for (const done of waiting.splice(0)) done(); } };
+}
+const keepaliveBytes = requests => requests.filter(request => request.keepalive).reduce((sum, request) => sum + request.bytes, 0);
+const pad = 'x'.repeat(4000);
+
+test('keepalive size: 30 events of about 4 KB on pagehide go in bodies of at most 60000 bytes together; the rest stay queued and stored', async t => {
+  const local = memoryStorage();
+  const { window } = browser('https://game.example/', { local });
+  const held = heldFetch(); t.mock.method(globalThis, 'fetch', held.fetch);
+  // batchSize 50: the 30th event must not start a normal full-batch send before pagehide.
+  const sdk = new Analytics(gameOptions({ game: false, persistQueue: true, batchSize: 50 }));
+  const stored = () => JSON.parse([...local.stored.entries()].find(([key]) => key.endsWith('_queue'))?.[1] ?? '[]').map(entry => entry.event.message_id);
+  try {
+    for (let i = 0; i < 30; i++) sdk.track(`e${i}`, { pad });
+    const all = sdk.pending.map(event => event.message_id);
+    window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.ok(held.requests.length >= 1);
+    for (const request of held.requests) { assert.equal(request.keepalive, true); assert.ok(request.bytes <= 60000, `body of ${request.bytes} bytes`); }
+    assert.ok(keepaliveBytes(held.requests) <= 60000, `total ${keepaliveBytes(held.requests)} bytes`);
+    const sentIds = held.requests.flatMap(request => request.events.map(event => event.message_id));
+    assert.ok(sentIds.length > 0 && sentIds.length < 30, `${sentIds.length} sent`);
+    assert.deepEqual(sentIds, all.slice(0, sentIds.length), 'the oldest go first, in order');
+    assert.deepEqual(sdk.pending.map(event => event.message_id), all.slice(sentIds.length), 'the rest stay queued, in order');
+    await settle(sdk);
+    assert.deepEqual(stored(), all, 'all still stored: nothing is accepted yet');
+
+    // The collector accepts: the sent events leave the stored queue; the rest stay stored.
+    held.release(); await tick(); await settle(sdk);
+    assert.deepEqual(stored(), all.slice(sentIds.length));
+    // The next normal send takes the rest (not keepalive, so not limited to 64 KiB).
+    const next = sdk.flush(); await tick(); held.release(); await next;
+    const last = held.requests.at(-1);
+    assert.equal(last.keepalive, false);
+    assert.deepEqual(last.events.map(event => event.message_id), all.slice(sentIds.length));
+  } finally { sdk.destroy(); }
+});
+
+test('keepalive size: visibilitychange then pagehide share the 60000 bytes in flight; a free budget sends more', async t => {
+  const { window } = browser('https://example.com/');
+  const held = heldFetch(); t.mock.method(globalThis, 'fetch', held.fetch);
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 50 });
+  try {
+    for (let i = 0; i < 30; i++) sdk.track(`e${i}`, { pad });
+    void sdk.flush(true); await tick(); // the send of visibilitychange to hidden (the test document has no listeners)
+    const first = held.requests.length;
+    window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.equal(held.requests.length, first, 'no budget left while the first requests are in flight');
+    assert.ok(keepaliveBytes(held.requests) <= 60000);
+    held.release(); await tick();
+    const before = sdk.pending.length;
+    window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.ok(held.requests.length > first, 'sent once the budget is free');
+    assert.ok(keepaliveBytes(held.requests.slice(first)) <= 60000);
+    assert.ok(sdk.pending.length < before);
+  } finally { held.release(); sdk.destroy(); }
+});
+
+test('keepalive size: one event over 60000 bytes is sent alone without keepalive; the others still go with keepalive', async t => {
+  const { window } = browser('https://example.com/');
+  const held = heldFetch(); t.mock.method(globalThis, 'fetch', held.fetch);
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false });
+  try {
+    sdk.track('big', { pad: 'y'.repeat(70000) });
+    sdk.track('small');
+    window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.equal(held.requests.length, 2);
+    assert.deepEqual(held.requests.map(request => [request.events.map(event => event.event), request.keepalive]), [[['big'], false], [['small'], true]]);
+    assert.ok(held.requests[0].bytes > 60000);
+    assert.equal(sdk.pending.length, 0);
+  } finally { held.release(); sdk.destroy(); }
+});
+
+test('shutdown(): game mode queues session_end with duration_s and sends it with a normal request, then stops', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return response(202); });
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    t.mock.timers.tick(90_000); sdk.track('level_start');
+    t.mock.timers.tick(30_000);
+    await sdk.shutdown();
+    const events = eventsOf(sent);
+    assert.deepEqual(tracked(events), ['session_start', 'game_open', 'level_start', 'session_end']);
+    const end = named(events, 'session_end')[0];
+    assert.equal(end.properties.duration_s, 120);
+    assert.equal(end.session_id, events[0].session_id);
+    assert.ok(sent.every(item => item.init.keepalive === false), 'not keepalive');
+    // Stopped, like the Node SDK: later calls send nothing.
+    sdk.track('after_shutdown'); await sdk.flush(); await sdk.shutdown();
+    globalThis.window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.equal(eventsOf(sent).length, 4);
+  } finally { sdk.destroy(); }
+});
+
+test('shutdown(): resolves within timeoutMs when the network hangs; the unsent events stay stored', async t => {
+  const local = memoryStorage();
+  browser('https://game.example/', { local });
+  let requests = 0;
+  t.mock.method(globalThis, 'fetch', () => { requests++; return new Promise(() => {}); });
+  const sdk = new Analytics(gameOptions());
+  const stored = () => JSON.parse([...local.stored.entries()].find(([key]) => key.endsWith('_queue'))?.[1] ?? '[]').map(entry => entry.event.event);
+  const started = Date.now();
+  await sdk.shutdown(150);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 140 && elapsed < 1000, `resolved after ${elapsed} ms`);
+  assert.equal(requests, 1);
+  await settle(sdk);
+  assert.deepEqual(stored(), ['session_start', 'game_open', 'session_end'], 'sent on the next start');
+});
+
+test('shutdown(): without game mode it only sends the queue (several batches), and the snippet instance has it', async t => {
+  browser('https://example.com/');
+  const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return response(202); });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 2 });
+  sdk.track('a'); sdk.track('b'); sdk.track('c');
+  await sdk.shutdown();
+  assert.deepEqual(sent.map(item => item.body.events.map(event => event.event)), [['a', 'b'], ['c']]);
+  assert.ok(sent.every(item => item.init.keepalive === false));
+  const { window, sent: snippetSent } = await runSnippet({ autoPageviews: 'false' });
+  window.manalens.track('from_snippet');
+  await window.manalens.shutdown();
+  assert.deepEqual(eventsOf(snippetSent).map(event => event.event), ['from_snippet']);
+});

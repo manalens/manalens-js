@@ -72,6 +72,18 @@ const MAX_RETRY_AFTER_MS = 60_000;
  */
 const POPSTATE_POLL_MS = 50;
 const POPSTATE_MAX_WAIT_MS = 1000;
+/**
+ * Browsers refuse a keepalive request when its body, plus the bodies of the
+ * other keepalive requests of the page still in flight, is over 64 KiB. The
+ * send on pagehide and on a hidden page keeps all its keepalive bodies in
+ * flight at once to at most this many bytes (UTF-8), which leaves room for
+ * the headers and for keepalive requests of other scripts.
+ */
+const KEEPALIVE_MAX_BYTES = 60_000;
+/** `{"events":[` and `]}`: the bytes of a request body around the events. */
+const BODY_WRAPPER_BYTES = 13;
+/** The default timeout of shutdown(), as the game SDKs on quit: session_end, then send for at most 2 s. */
+const SHUTDOWN_TIMEOUT_MS = 2000;
 
 /**
  * A failed send whose events were dropped; given to the errorHandler option.
@@ -192,6 +204,10 @@ export class Analytics {
   private backoffStep = 0;
   /** Smaller batches after a 413 (batch too large): halved on each 413, back to batchSize after a 2xx. */
   private batchLimit = Infinity;
+  /** Body bytes of this SDK's keepalive requests still in flight (at most KEEPALIVE_MAX_BYTES). */
+  private keepaliveInFlight = 0;
+  /** shutdown() was called: new events are dropped while the queue is sent. */
+  private closing = false;
   /** The pathname of the last pageview sent for a pushState / replaceState navigation. */
   private historyPathname?: string;
   /**
@@ -225,8 +241,8 @@ export class Analytics {
     this.options = {
       autoPageviews: true,
       // Fewer, larger requests (2026-11-22): each request costs a queue write, read and ack on the
-      // collector. 30 events stays under the collector's 50 and the 64 KB keepalive cap on pagehide;
-      // pagehide and visibilitychange still send at once, so nothing waits when a player leaves.
+      // collector. 30 events stays under the collector's 50. pagehide and visibilitychange still send
+      // at once, in keepalive requests of at most 60000 bytes together (flushKeepalive).
       flushIntervalMs: 15000,
       ...withoutGameOptions(options),
       // tracking: false is the same as disabled: true (Formo's boolean form).
@@ -592,7 +608,7 @@ export class Analytics {
   }
 
   private enqueue(type: AnalyticsEvent['type'], event?: string, properties: AnalyticsEvent['properties'] = {}, context?: AnalyticsEvent['context'], originalTimestamp = new Date().toISOString(), traits?: Traits): void {
-    if (!this.active()) return;
+    if (!this.active() || this.closing) return;
     if (this.pageExcluded()) { this.logger.log('debug', `Not sent: ${type} on an excluded host or path`); return; }
     // An identify held back on an excluded page goes out first, on this allowed page.
     if (type !== 'identify' && this.deferredIdentify && this.userId && this.identityAllowed()) {
@@ -821,9 +837,7 @@ export class Analytics {
   private size(event: AnalyticsEvent): number {
     let size = this.sizes.get(event);
     if (size === undefined) {
-      const json = JSON.stringify(event);
-      // UTF-8 bytes; the UTF-16 length is a close fallback where TextEncoder is missing.
-      size = typeof TextEncoder === 'undefined' ? json.length : new TextEncoder().encode(json).byteLength;
+      size = utf8Bytes(JSON.stringify(event));
       this.sizes.set(event, size);
     }
     return size;
@@ -862,13 +876,87 @@ export class Analytics {
    * in memory (server errors at most retryCount times). A 413 (batch too large)
    * keeps the events, halves the batch and sends again at once, without a
    * backoff and without counting a retry; a 413 for one event drops it. Other
-   * 4xx drop the batch.
+   * 4xx drop the batch. With `keepalive` (the SDK's send on pagehide and on a
+   * hidden page), the queue goes in keepalive requests of at most 60000 bytes
+   * together; see flushKeepalive().
    */
   async flush(keepalive = false): Promise<void> {
     // Stored events of an earlier load go first: wait until they are read.
     if (this.restoring) await this.restoring;
     if (!this.active() || this.pending.length === 0) return;
+    if (keepalive) return this.flushKeepalive();
     const batch = this.pending.splice(0, Math.min(this.options.batchSize, this.batchLimit));
+    const body = JSON.stringify({ events: batch });
+    const result = await this.send(batch, body, false);
+    if (!result) return;
+    this.requeue(result.again);
+    // After a 413, send the smaller batch at once.
+    if (result.split) await this.flush();
+  }
+
+  /**
+   * The send on pagehide and on a hidden page (P-2853). Browsers refuse a
+   * keepalive request when the bodies of the page's keepalive requests in
+   * flight are over 64 KiB, and then the events would be lost. So the queue
+   * goes in requests whose bodies, together with this SDK's keepalive
+   * requests still in flight, are at most KEEPALIVE_MAX_BYTES (UTF-8 bytes
+   * of the exact body). Each request has at most batchSize events. The events
+   * that do not fit stay queued (and stored with persistQueue) for the next
+   * send. One event whose body alone is over the limit can never go with
+   * keepalive: it is sent alone with a normal request, which completes when
+   * the page is only hidden and often also when it closes.
+   */
+  private async flushKeepalive(): Promise<void> {
+    const sends: Promise<{ again: AnalyticsEvent[] } | undefined>[] = [];
+    const limit = Math.min(this.options.batchSize, this.batchLimit);
+    while (this.pending.length) {
+      const budget = KEEPALIVE_MAX_BYTES - this.keepaliveInFlight;
+      const batch: AnalyticsEvent[] = [];
+      let bytes = BODY_WRAPPER_BYTES;
+      for (const event of this.pending) {
+        if (batch.length >= limit) break;
+        const next = bytes + this.size(event) + (batch.length ? 1 : 0);
+        if (next > budget) break;
+        batch.push(event); bytes = next;
+      }
+      if (!batch.length) {
+        const head = this.pending[0];
+        if (BODY_WRAPPER_BYTES + this.size(head) <= KEEPALIVE_MAX_BYTES) break; // fits later, when the budget is free again
+        this.pending.shift();
+        this.logger.log('warn', 'An event over the keepalive limit is sent alone without keepalive');
+        sends.push(this.send([head], JSON.stringify({ events: [head] }), false));
+        continue;
+      }
+      // The exact body: its UTF-8 length decides (size() can count UTF-16 units where TextEncoder is missing).
+      let body = JSON.stringify({ events: batch });
+      let reserved = utf8Bytes(body);
+      while (batch.length > 1 && reserved > budget) { batch.pop(); body = JSON.stringify({ events: batch }); reserved = utf8Bytes(body); }
+      if (reserved > budget) break;
+      this.pending.splice(0, batch.length);
+      this.keepaliveInFlight += reserved;
+      sends.push(this.send(batch, body, true).finally(() => { this.keepaliveInFlight -= reserved; }));
+    }
+    if (this.pending.length) this.logger.log('debug', `${this.pending.length} event(s) wait: over the keepalive limit for this send`);
+    // The events of failed sends go back to the front of the queue in their first order.
+    const results = await Promise.all(sends);
+    const again = results.flatMap(result => result?.again ?? []);
+    if (again.length) this.requeue(again);
+  }
+
+  /** Put events back at the front of the queue, in order, and keep the queue under maxQueueSize. */
+  private requeue(events: AnalyticsEvent[]): void {
+    if (!events.length) return;
+    this.pending.unshift(...events);
+    this.limitQueue();
+  }
+
+  /**
+   * Send one batch. Returns the events to queue again (`again`, already
+   * without identity when the identity changed in flight), and `split` after
+   * a 413 for a batch of several events; undefined when nothing goes back to
+   * the queue (accepted, refused for good, or opted out / destroyed in flight).
+   */
+  private async send(batch: AnalyticsEvent[], body: string, keepalive: boolean): Promise<{ again: AnalyticsEvent[]; split: boolean } | undefined> {
     const generation = this.identityGeneration;
     const optOutGeneration = this.optOutGeneration;
     let retry: AnalyticsEvent[];
@@ -877,7 +965,7 @@ export class Analytics {
       const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v0/events', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-publishable-key': this.options.publishableKey },
-        body: JSON.stringify({ events: batch }),
+        body,
         credentials: 'omit',
         keepalive,
       });
@@ -905,7 +993,7 @@ export class Analytics {
           const reason = await refusalReason(response);
           this.reportDropped(`The collector refused ${batch.length} event(s): HTTP ${response.status}${reason.text ? ` ${reason.text}` : ''}. The events are dropped`, response.status, batch.length, reason.codes);
         }
-        return;
+        return undefined;
       } else {
         retry = batch.filter(event => {
           const attempts = (this.attempts.get(event.message_id) ?? 0) + 1;
@@ -928,7 +1016,7 @@ export class Analytics {
     // State may have changed while the request was in flight: drop the batch
     // after optOut()/destroy(); strip identity after reset(), setConsent(false)
     // or any other identity change, even if consent was granted again since.
-    if (!this.active() || optOutGeneration !== this.optOutGeneration) { for (const event of batch) this.attempts.delete(event.message_id); return; }
+    if (!this.active() || optOutGeneration !== this.optOutGeneration) { for (const event of batch) this.attempts.delete(event.message_id); return undefined; }
     const stale = generation !== this.identityGeneration || !this.identityAllowed();
     const again = stale ? stripIdentity(retry) : retry;
     if (stale && this.persist) {
@@ -937,12 +1025,48 @@ export class Analytics {
       this.persist.remove(retry.filter(event => !kept.has(event.message_id)).map(event => event.message_id));
       if (this.persistAllowed()) this.persist.put(again);
     }
-    this.pending.unshift(...again);
-    this.limitQueue();
-    // After a 413, send the smaller batch at once. Not from a keepalive send on
-    // pagehide: the page is going away. The events stay queued (and stored with
-    // persistQueue), and the next send uses the smaller batch.
-    if (split && !keepalive) await this.flush();
+    // After a 413, flush() sends the smaller batch at once. Not after a
+    // keepalive send on pagehide: the page is going away. The events stay
+    // queued (and stored with persistQueue), and the next send uses the
+    // smaller batch.
+    return { again, split: split && !keepalive };
+  }
+
+  /**
+   * End the game and send the queue, for example before an Electron game
+   * quits. In game mode, the open game session ends with `session_end`
+   * (`duration_s`). Then the SDK sends the queue with normal requests (not
+   * keepalive), for at most `timeoutMs` (default 2000), and stops, like the
+   * Node SDK's shutdown(): timers and listeners are removed, and later calls
+   * send nothing. Create a new instance to track again. Events not sent in
+   * time stay in the stored queue with persistQueue (the default in game
+   * mode) and go on the next start; without it they are lost. Never rejects.
+   */
+  async shutdown(timeoutMs = SHUTDOWN_TIMEOUT_MS): Promise<void> {
+    if (this.stopped || this.closing) return;
+    // A page view that waits goes first; then the session ends. Later events are dropped.
+    this.sendPendingPage();
+    if (this.game && this.gameSession && this.active() && this.identityAllowed()) {
+      this.endGameSession(Date.now());
+      clearSessionId(this.keys.sessionId);
+    }
+    this.closing = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>(resolve => { timer = setTimeout(resolve, Math.max(0, Number.isFinite(timeoutMs) ? timeoutMs : SHUTDOWN_TIMEOUT_MS)); });
+    const drain = (async () => {
+      // One batch per flush(): stop when a send makes no progress (offline, a server error).
+      while (this.active() && this.pending.length) {
+        const before = this.pending.length;
+        await this.flush();
+        if (this.pending.length >= before) break;
+      }
+      // The stored copy of what is still queued is written before the app quits.
+      await this.persist?.settled();
+    })().catch(() => undefined);
+    await Promise.race([drain, timeout]);
+    clearTimeout(timer);
+    if (this.pending.length) this.logger.log('warn', `shutdown: ${this.pending.length} event(s) not sent${this.persist ? ' (kept in the stored queue)' : ''}`);
+    this.destroy();
   }
 
   /** Log the drop and call the errorHandler option (an error thrown there is caught). */
@@ -970,6 +1094,11 @@ export class Analytics {
     this.attempts.clear();
     this.stopped = true;
   }
+}
+
+/** UTF-8 bytes of a string; the UTF-16 length where TextEncoder is missing. */
+function utf8Bytes(text: string): number {
+  return typeof TextEncoder === 'undefined' ? text.length : new TextEncoder().encode(text).byteLength;
 }
 
 /** 408 Request Timeout, 429 Too Many Requests and 5xx are worth another try. */
