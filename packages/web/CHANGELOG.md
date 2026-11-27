@@ -1,5 +1,11 @@
 # @manalens/web
 
+## 0.4.0
+
+### Minor Changes
+
+- 3954739: Breaking: captured window errors and unhandled rejections now send `source: "auto"` (was `"web_window"`); `trackError()` still sends `source: "manual"`.
+
 ## 0.3.0
 
 ### Minor Changes
