@@ -85,8 +85,9 @@ export interface AnalyticsOptions {
   /**
    * How many times a batch is sent again after a server error (408, 429 or
    * 5xx), default 3, from 0 to 10. Network errors (offline) do not count: the
-   * events wait in memory until the network is back. Other 4xx responses are
-   * not retried.
+   * events wait in memory until the network is back. A 413 (batch too large)
+   * is not counted: the SDK halves the batch and sends again. Other 4xx
+   * responses are not retried.
    */
   retryCount?: number;
   /** Queue limit in bytes (serialized events), default and maximum 500 KiB (512000 bytes), minimum 200 bytes. The oldest events are dropped first. */
@@ -109,7 +110,8 @@ export interface AnalyticsOptions {
   ready?: (analytics: import('./index').Analytics) => void;
   /**
    * Called when events are dropped after a send: the collector refused them
-   * (a 4xx other than 408 and 429), or a server error (408, 429, 5xx) repeated
+   * (a 4xx other than 408, 413 and 429, or a 413 for a single event), or a
+   * server error (408, 429, 5xx) repeated
    * more than retryCount times. Network errors (offline) do not call it: those
    * events wait in memory. An error thrown in it is caught.
    */

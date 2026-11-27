@@ -17,7 +17,7 @@ and the packed `@manalens/node` loads with `require` and `import`.
 `pnpm test` runs `pnpm test:example`. The examples build the actual ESM and browser bundles. Tests cover page/custom
 events, the script snippet (including `data-cross-subdomain`), the first-party
 `anonymous_id` cookie with localStorage and memory fallbacks, cookie migration
-to the apex domain, publishable-key scoping (only `mana_pk_` keys pass), the 30-minute `session_id` and its 24-hour maximum age (also a stored session of a pre-release SDK build, which is not continued), `getSessionId()`, the reason codes of a refused batch, identify
+to the apex domain, publishable-key scoping (only `mana_pk_` keys pass), the 30-minute `session_id` and its 24-hour maximum age (also a stored session of a pre-release SDK build, which is not continued), `getSessionId()`, the reason codes of a refused batch, a 413 that halves the batch (sent again at once without backoff or a counted retry, one event dropped, full size after a success, no second send from the pagehide keepalive send), identify
 events with persisted `user_id`, `reset()`, `optOut()` / `optIn()`, the
 optional consent mode (`requireConsent`, `setConsent`, `data-require-consent`),
 failed in-flight batches after `reset()`, `setConsent(false)` (also then `true`), `optOut()` (also then `optIn()`), deletion and
@@ -48,7 +48,8 @@ mode, publishable key in app mode, API keys refused), the event envelope of
 both channels, app context, app sessions (30 minutes idle, 24 hours maximum),
 batch limits (100 server, 50 app), `flushAt` and `flushInterval`, retries with
 the same `message_id` (5xx, 408, 429, network errors), backoff, jitter and
-`Retry-After`, refused events of an accepted batch, validation (events dropped,
+`Retry-After`, a 413 that halves the batch (sent again at once, not counted as
+a retry; one event is dropped), refused events of an accepted batch, validation (events dropped,
 never thrown), and `shutdown()`.
 
 The contract tests read `packages/node/test/fixtures/collector-contract.json`:

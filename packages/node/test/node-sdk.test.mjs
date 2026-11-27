@@ -274,7 +274,7 @@ test('a retry that succeeds sends once more and stops', async () => {
   assert.ok(!logs.some(m => /dropped/.test(m)));
 });
 
-test('other 4xx drops the batch without a retry', async () => {
+test('other 4xx (and 413 for one event) drops the batch without a retry', async () => {
   for (const status of [400, 401, 403, 413]) {
     const { analytics, calls, logs } = client(SECRET, {}, [status]);
     analytics.track({ event: 'a', userId: 'u' });
@@ -282,6 +282,51 @@ test('other 4xx drops the batch without a retry', async () => {
     assert.equal(calls.length, 1, `status ${status}`);
     assert.ok(logs.some(m => m.includes(`dropped 1 events: HTTP ${status}`)), `status ${status}`);
   }
+});
+
+test('413: a batch of 20 is halved and sent again at once, with no event lost and no backoff', async () => {
+  const { analytics, calls, logs } = client(SECRET, { flushAt: 100, retryDelay: 60_000 }, [413, 202, 202]);
+  for (let i = 0; i < 20; i++) analytics.track({ event: `e${i}`, userId: 'u' });
+  const started = Date.now();
+  await analytics.flush();
+  assert.ok(Date.now() - started < 5_000, 'no backoff wait between the 413 and the next send');
+  assert.deepEqual(calls.map(c => c.body.events.length), [20, 10, 10]);
+  const ids = calls[0].body.events.map(e => e.message_id);
+  assert.deepEqual([...calls[1].body.events, ...calls[2].body.events].map(e => e.message_id), ids, 'same events, same order, same message_id');
+  assert.ok(logs.some(m => m.includes('413: batch of 20 events too large, sending 10')), logs.join('\n'));
+  assert.ok(!logs.some(m => /dropped|retry/.test(m)), logs.join('\n'));
+});
+
+test('413: a batch of one event (also after halving) is dropped', async () => {
+  const one = client(SECRET, {}, [413]);
+  one.analytics.track({ event: 'a', userId: 'u' });
+  await one.analytics.flush();
+  assert.equal(one.calls.length, 1);
+  assert.ok(one.logs.some(m => m.includes('dropped 1 events: HTTP 413')), one.logs.join('\n'));
+  const { analytics, calls, logs } = client(SECRET, { flushAt: 100 }, [413, 413, 413, 413]);
+  for (const event of ['a', 'b', 'c']) analytics.track({ event, userId: 'u' });
+  await analytics.flush();
+  assert.deepEqual(calls.map(c => c.body.events.length), [3, 1, 1, 1]);
+  assert.deepEqual(calls.slice(1).map(c => c.body.events[0].event), ['a', 'b', 'c']);
+  assert.equal(logs.filter(m => m.includes('dropped 1 events: HTTP 413')).length, 3);
+});
+
+test('413: after a success the next batch uses the full size again', async () => {
+  const { analytics, calls } = client(SECRET, { flushAt: 500, maxQueueLength: 1000 }, [413]);
+  for (let i = 0; i < 250; i++) analytics.track({ event: 'tick', userId: `u${i}` });
+  await analytics.flush();
+  assert.deepEqual(calls.map(c => c.body.events.length), [100, 50, 100, 100]);
+  assert.equal(new Set(calls.slice(1).flatMap(c => c.body.events.map(e => e.message_id))).size, 250);
+});
+
+test('413: not counted as a retry; the failure count of the batch does not change', async () => {
+  const { analytics, calls, logs } = client(SECRET, { flushAt: 100, retryCount: 2 }, [500, 413, 500, 500, 200]);
+  analytics.track({ event: 'a', userId: 'u' });
+  analytics.track({ event: 'b', userId: 'u' });
+  await analytics.flush();
+  // a and b: 500 (failure 1), 413; a alone: 500 (failure 2), 500 (failure 3, dropped); b alone: 200.
+  assert.deepEqual(calls.map(c => c.body.events.map(e => e.event).join()), ['a,b', 'a,b', 'a', 'a', 'b']);
+  assert.ok(logs.some(m => m.includes('dropped 1 events after 3 attempts: HTTP 500')), logs.join('\n'));
 });
 
 test('refused events of an accepted batch are logged and not sent again (P-2787)', async () => {

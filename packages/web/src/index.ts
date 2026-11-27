@@ -190,6 +190,8 @@ export class Analytics {
   /** Scheduled flushes wait until this time after a failure (backoff). */
   private retryAt = 0;
   private backoffStep = 0;
+  /** Smaller batches after a 413 (batch too large): halved on each 413, back to batchSize after a 2xx. */
+  private batchLimit = Infinity;
   /** The pathname of the last pageview sent for a pushState / replaceState navigation. */
   private historyPathname?: string;
   /**
@@ -857,16 +859,20 @@ export class Analytics {
   /**
    * Send one batch now. A call to flush() ignores the backoff; the timer and a
    * full batch wait for it. Network errors and 408 / 429 / 5xx keep the batch
-   * in memory (server errors at most retryCount times); other 4xx drop it.
+   * in memory (server errors at most retryCount times). A 413 (batch too large)
+   * keeps the events, halves the batch and sends again at once, without a
+   * backoff and without counting a retry; a 413 for one event drops it. Other
+   * 4xx drop the batch.
    */
   async flush(keepalive = false): Promise<void> {
     // Stored events of an earlier load go first: wait until they are read.
     if (this.restoring) await this.restoring;
     if (!this.active() || this.pending.length === 0) return;
-    const batch = this.pending.splice(0, this.options.batchSize);
+    const batch = this.pending.splice(0, Math.min(this.options.batchSize, this.batchLimit));
     const generation = this.identityGeneration;
     const optOutGeneration = this.optOutGeneration;
     let retry: AnalyticsEvent[];
+    let split = false;
     try {
       const response = await fetch(this.options.endpoint.replace(/\/$/, '') + '/v0/events', {
         method: 'POST',
@@ -875,13 +881,20 @@ export class Analytics {
         credentials: 'omit',
         keepalive,
       });
-      if (response.ok || !retryableStatus(response.status)) {
-        // Accepted, or refused for good (400, 401, 403, 413 ...): sending it again cannot help.
+      if (response.status === 413 && batch.length > 1) {
+        // Too large: keep every event (same order, same message_id), halve the
+        // batch and send again. Not a failure: no backoff, no retry counted.
+        this.batchLimit = Math.max(1, Math.floor(batch.length / 2));
+        this.logger.log('warn', `413: batch of ${batch.length} events too large, sending ${this.batchLimit}`);
+        retry = batch;
+        split = true;
+      } else if (response.ok || !retryableStatus(response.status)) {
+        // Accepted, or refused for good (400, 401, 403, a 413 for one event ...): sending it again cannot help.
         for (const event of batch) this.attempts.delete(event.message_id);
         // Only now does the stored copy go.
         this.persist?.remove(batch.map(event => event.message_id));
         if (response.ok) {
-          this.backoffStep = 0; this.retryAt = 0;
+          this.backoffStep = 0; this.retryAt = 0; this.batchLimit = Infinity;
           // An accepted batch can still list refused events: they are dropped, not sent again.
           const refused = await refusedInAccepted(response);
           const dropped = Math.min(batch.length, refused.rejected);
@@ -893,16 +906,17 @@ export class Analytics {
           this.reportDropped(`The collector refused ${batch.length} event(s): HTTP ${response.status}${reason.text ? ` ${reason.text}` : ''}. The events are dropped`, response.status, batch.length, reason.codes);
         }
         return;
+      } else {
+        retry = batch.filter(event => {
+          const attempts = (this.attempts.get(event.message_id) ?? 0) + 1;
+          if (attempts > this.options.retryCount) { this.attempts.delete(event.message_id); this.persist?.remove([event.message_id]); return false; }
+          this.attempts.set(event.message_id, attempts);
+          return true;
+        });
+        if (retry.length < batch.length) this.reportDropped(`Dropped ${batch.length - retry.length} event(s) after ${this.options.retryCount} retries: HTTP ${response.status}`, response.status, batch.length - retry.length);
+        if (retry.length) this.logger.log('warn', `Send failed with HTTP ${response.status}: ${retry.length} event(s) will be sent again`);
+        this.backOff(response.headers?.get?.('retry-after'));
       }
-      retry = batch.filter(event => {
-        const attempts = (this.attempts.get(event.message_id) ?? 0) + 1;
-        if (attempts > this.options.retryCount) { this.attempts.delete(event.message_id); this.persist?.remove([event.message_id]); return false; }
-        this.attempts.set(event.message_id, attempts);
-        return true;
-      });
-      if (retry.length < batch.length) this.reportDropped(`Dropped ${batch.length - retry.length} event(s) after ${this.options.retryCount} retries: HTTP ${response.status}`, response.status, batch.length - retry.length);
-      if (retry.length) this.logger.log('warn', `Send failed with HTTP ${response.status}: ${retry.length} event(s) will be sent again`);
-      this.backOff(response.headers?.get?.('retry-after'));
     } catch {
       // Network error (offline, DNS, CORS): not counted, the events wait.
       retry = batch;
@@ -925,6 +939,10 @@ export class Analytics {
     }
     this.pending.unshift(...again);
     this.limitQueue();
+    // After a 413, send the smaller batch at once. Not from a keepalive send on
+    // pagehide: the page is going away. The events stay queued (and stored with
+    // persistQueue), and the next send uses the smaller batch.
+    if (split && !keepalive) await this.flush();
   }
 
   /** Log the drop and call the errorHandler option (an error thrown there is caught). */

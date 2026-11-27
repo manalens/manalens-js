@@ -1,5 +1,6 @@
 // Event queue: batches events, sends them on a size or time trigger, and retries
-// failed requests with exponential backoff and jitter.
+// failed requests with exponential backoff and jitter. A 413 (batch too large)
+// halves the batch and sends again at once.
 
 import type { WireEvent } from '../types/index.js';
 
@@ -37,7 +38,10 @@ const DEFAULT_TIMEOUT = 10_000;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, Math.floor(value)));
 
-/** Network errors, 5xx, 408 and 429 are retried. Other statuses are not. */
+/**
+ * Network errors, 5xx, 408 and 429 are retried. A 413 is not retried as it is:
+ * the queue halves the batch (see EventQueue). Other statuses are not retried.
+ */
 export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
@@ -78,12 +82,17 @@ export function retryDelay(attempt: number, base: number, retryAfterMs?: number,
   return Math.round(exp / 2 + random() * (exp / 2));
 }
 
+/** The outcome of send(): a 413 for more than one event, with the failures so far. */
+type SendResult = { tooLarge: false } | { tooLarge: true; attempt: number };
+
 export class EventQueue {
   private queue: { event: WireEvent; bytes: number }[] = [];
   private bytes = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private chain: Promise<void> = Promise.resolve();
   private stopper = new AbortController();
+  /** Smaller batches after a 413: halved on each 413, back to maxBatch after a 2xx. */
+  private batchLimit = Infinity;
 
   private readonly url: string;
   private readonly headers: Record<string, string>;
@@ -154,14 +163,28 @@ export class EventQueue {
   }
 
   private async drain(): Promise<void> {
+    // The failure count of a batch that was halved after a 413 goes on to the next send.
+    let attempt = 0;
     while (this.queue.length > 0 && !this.stopper.signal.aborted) {
-      const items = this.queue.splice(0, this.maxBatch);
+      const items = this.queue.splice(0, Math.min(this.maxBatch, this.batchLimit));
       for (const item of items) this.bytes -= item.bytes;
+      let result: SendResult = { tooLarge: false };
       try {
-        await this.send(items.map(item => item.event));
+        result = await this.send(items.map(item => item.event), attempt);
       } catch (error) {
         // send() handles every expected failure. This is a bug guard.
         this.log(`send failed: ${(error as Error).message}`);
+      }
+      attempt = 0;
+      if (result.tooLarge) {
+        // 413 for more than one event: keep every event (same order, same
+        // message_id) and send again at once with half the batch. Not a
+        // failure: no backoff wait, and the failure count does not change.
+        this.queue.unshift(...items);
+        for (const item of items) this.bytes += item.bytes;
+        this.batchLimit = Math.max(1, Math.floor(items.length / 2));
+        this.log(`413: batch of ${items.length} events too large, sending ${this.batchLimit}`);
+        attempt = result.attempt;
       }
     }
   }
@@ -170,44 +193,47 @@ export class EventQueue {
    * POST one batch. The body is made once, so every retry sends the same
    * message_id values and the collector counts each event once.
    */
-  private async send(events: WireEvent[]): Promise<void> {
+  private async send(events: WireEvent[], firstAttempt = 0): Promise<SendResult> {
     const body = JSON.stringify({ events });
-    for (let attempt = 0; ; attempt++) {
+    for (let attempt = firstAttempt; ; attempt++) {
       let retryAfter: number | undefined;
       let reason: string;
       try {
         const signal = AbortSignal.any([this.stopper.signal, AbortSignal.timeout(this.timeout)]);
         const response = await this.fetcher(this.url, { method: 'POST', headers: this.headers, body, signal });
         if (response.ok) {
+          this.batchLimit = Infinity;
           // A body read or parse error never fails the send: the batch was accepted.
           const refused = refusedEvents(await response.text().catch(() => ''));
           if (refused) this.log(`dropped ${refused.rejected} of ${events.length} events: refused by the collector${refused.codes.length ? ` (${refused.codes.join(', ')})` : ''}`);
-          return;
+          return { tooLarge: false };
         }
         const text = await response.text().catch(() => '');
+        // Too large: the queue halves the batch. A 413 for one event drops it below.
+        if (response.status === 413 && events.length > 1) return { tooLarge: true, attempt };
         reason = `HTTP ${response.status}${text ? ` ${text.slice(0, 300)}` : ''}`;
         if (!isRetryableStatus(response.status)) {
           this.log(`dropped ${events.length} events: ${reason}`);
-          return;
+          return { tooLarge: false };
         }
         retryAfter = parseRetryAfter(response.headers.get('retry-after'));
       } catch (error) {
         if (this.stopper.signal.aborted) {
           this.log(`dropped ${events.length} events: shutdown timed out`);
-          return;
+          return { tooLarge: false };
         }
         reason = `network error: ${(error as Error).message}`;
       }
       if (attempt >= this.retryCount) {
         this.log(`dropped ${events.length} events after ${attempt + 1} attempts: ${reason}`);
-        return;
+        return { tooLarge: false };
       }
       const delay = retryDelay(attempt, this.retryBase, retryAfter, this.random);
       this.log(`${reason}; retry ${attempt + 1} of ${this.retryCount} in ${delay} ms`);
       await this.sleep(delay);
       if (this.stopper.signal.aborted) {
         this.log(`dropped ${events.length} events: shutdown timed out`);
-        return;
+        return { tooLarge: false };
       }
     }
   }

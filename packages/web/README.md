@@ -111,7 +111,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `autoPageviews` | `true` | Initial pageview, SPA navigation (`history.pushState` / `replaceState`), back and forward (`popstate`) and `manalens:navigate`; see [Pageviews](#pageviews). Snippet: `data-auto-pageviews="false"` |
 | `batchSize` | `30` | Events per request (the collector takes at most 50) |
 | `flushIntervalMs` | `15000` | Flush timer; the page hiding or closing sends at once |
-| `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) are not counted. Other 4xx responses are not retried. |
+| `retryCount` | `3` | Retries after a server error (408, 429, 5xx), 0 to 10. Network errors (offline) and 413 responses are not counted. Other 4xx responses are not retried. |
 | `maxQueueSize` | `512000` | Queue limit in bytes (200 to 500 KB). The oldest events are dropped first. |
 | `requireConsent` | `false` | Consent mode; see below |
 | `tracking` | `true` | `false` is the same as `disabled: true`. An object sets rules: `{ excludeHosts, excludePaths, excludeTimezones, excludeQueryParams }`; see [Tracking rules](#tracking-rules) |
@@ -129,16 +129,28 @@ browser storage only with the `persistQueue` option (a game with `app`; see
 up to 30 s, with jitter, or longer when a `429` has `Retry-After` (up to 60 s).
 A call to `flush()` sends at once. `pagehide` sends with `keepalive`.
 
+**Batch too large (413).** The collector answers `413` when a batch is too
+large. The SDK keeps every event (same order, same `message_id`), halves the
+batch, and sends again at once. This is not a failure: there is no backoff
+wait, and it does not count toward `retryCount`. Each new `413` halves the
+batch again. A `413` for a single event drops that event (`errorHandler` gets
+`status` 413 and `dropped` 1). After an accepted batch, the full `batchSize`
+applies again. A `413` to the `keepalive` send on `pagehide` does not send
+again on that page: the events stay queued (and stored with `persistQueue`),
+and the next send uses the smaller batch.
+
 ### Delivery errors
 
 `errorHandler` gets a `SendError` (`name`, `message`, `status`, `dropped`,
 `reasons`) when events are dropped:
 
-- The collector refused the batch (a 4xx other than 408 and 429, for example
+- The collector refused the batch (a 4xx other than 408, 413 and 429, for example
   `401` for a wrong key or `403` for a page off the project domain). A refused
   batch is dropped and is not sent again. `reasons` has the reason codes of
   the collector, and `message` (also in the error log) has its text, for
   example `HTTP 400 INVALID_EVENT, SESSION_ID_REQUIRED: ...`.
+- The collector answered `413` (too large) for a batch of one event. A larger
+  batch is halved and sent again, not dropped.
 - The collector accepted the batch (`202`) but refused some of its events,
   for example an event over a properties limit. The valid events are stored;
   the refused ones are dropped and are not sent again. `status` is `202`,
@@ -163,7 +175,7 @@ add `levels` to choose. The list is matched exactly, like Formo's SDK:
 | --- | --- |
 | `info` | Start (with `autoPageviews` and consent mode), disabled, excluded timezone, opt-out |
 | `debug` | Each queued event (type and event name), each sent batch (count), events not sent on an excluded host or path |
-| `warn` | A failed send that will be retried (status or network error), a full queue that dropped an event |
+| `warn` | A failed send that will be retried (status or network error), a batch halved after a 413, a full queue that dropped an event |
 | `error` | Events dropped (refused, or out of retries) |
 | `trace` | Nothing at the moment |
 

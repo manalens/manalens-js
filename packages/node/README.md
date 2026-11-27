@@ -4,6 +4,14 @@ Manalens for Node.js ([open source](https://github.com/manalens/manalens-js)). I
 
 Ported from `@formo/analytics-node` without the wallet code.
 
+Delivery: network errors, `408`, `429` and `5xx` are retried (`retryCount`,
+default 3). A `413` (batch too large, for example a server batch over 256 KB)
+is not a failure: the SDK keeps every event, halves the batch, and sends again
+at once, without a backoff wait and without counting a retry. A `413` for a
+single event drops that event. After an accepted batch, full batches apply
+again. Other `4xx` responses drop the batch. With `debug: true`, drops and
+retries go to the logger.
+
 ## Modes
 
 - `server` (default): a backend or a dedicated game server. Uses the **secret key** (`mana_sk_...`). Events have `channel: 'server'`. At most 100 events in a batch.

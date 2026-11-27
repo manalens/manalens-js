@@ -137,7 +137,7 @@ export interface AnalyticsOptions {
   maxQueueSize?: number;
   /** Drop new events when this many are waiting. Default 10000. */
   maxQueueLength?: number;
-  /** Retries after the first attempt. Default 3. */
+  /** Retries after the first attempt (network errors, 408, 429, 5xx). Default 3. A 413 is not counted: the batch is halved and sent again. */
   retryCount?: number;
   /** First retry delay in ms, doubled on each retry, with jitter. Default 1000. */
   retryDelay?: number;

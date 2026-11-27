@@ -743,7 +743,7 @@ test('refused events of an accepted batch go to the error log and the errorHandl
 
 const response = (status, headers = {}) => ({ ok: status >= 200 && status < 300, status, headers: { get: name => headers[name.toLowerCase()] ?? null } });
 
-test('retry: a refused batch (400, 401, 403) is dropped, not sent again', async t => {
+test('retry: a refused batch (400, 401, 403, and 413 for one event) is dropped, not sent again', async t => {
   for (const status of [400, 401, 403, 413]) {
     browser('https://example.com/');
     const sent = []; t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(sent.length === 1 ? status : 202); });
@@ -769,6 +769,95 @@ test('retry: 408, 429 and 5xx are sent again at most retryCount times', async t 
       assert.equal(new Set(sent.map(body => body.events[0].message_id)).size, 1);
     } finally { sdk.destroy(); }
   }
+});
+
+test('413: a batch of 20 is halved and sent again at once; no event lost, no errorHandler, no backoff', async t => {
+  browser('https://example.com/');
+  const statuses = [413, 202, 202]; const sent = []; const errors = []; const warnings = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return response(statuses[sent.length - 1] ?? 202); });
+  t.mock.method(console, 'warn', (...args) => { warnings.push(args.join(' ')); });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 30, logger: { enabled: true, levels: ['warn'] }, errorHandler: error => errors.push(error) });
+  try {
+    for (let i = 0; i < 20; i++) sdk.track(`e${i}`);
+    await sdk.flush();
+    assert.deepEqual(sent.map(item => item.body.events.length), [20, 10], 'the 413 is followed at once by a batch of 10');
+    assert.equal(sdk.retryAt, 0, 'no backoff wait after a 413');
+    await sdk.flush();
+    assert.deepEqual(sent.map(item => item.body.events.length), [20, 10, 10]);
+    const first = sent[0].body.events.map(event => event.message_id);
+    assert.deepEqual([...sent[1].body.events, ...sent[2].body.events].map(event => event.message_id), first, 'same events, same order, same message_id');
+    assert.deepEqual(sent[0].body.events.map(event => event.event), Array.from({ length: 20 }, (_, i) => `e${i}`));
+    assert.equal(errors.length, 0);
+    assert.ok(warnings.some(line => line.includes('413: batch of 20 events too large, sending 10')), warnings.join('\n'));
+  } finally { sdk.destroy(); }
+});
+
+test('413: a batch of one event (also after halving) is dropped with SendError status 413, dropped 1', async t => {
+  browser('https://example.com/');
+  const sent = []; const errors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(413); });
+  t.mock.method(console, 'error', () => {});
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, errorHandler: error => errors.push(error) });
+  try {
+    sdk.track('alone'); await sdk.flush();
+    assert.equal(sent.length, 1);
+    assert.equal(errors.length, 1); assert.equal(errors[0].status, 413); assert.equal(errors[0].dropped, 1);
+    await sdk.flush();
+    assert.equal(sent.length, 1, 'the dropped event is not sent again');
+    sdk.track('a'); sdk.track('b'); sdk.track('c'); await sdk.flush();
+    assert.deepEqual(sent.slice(1).map(body => body.events.length), [3, 1], '3 events, then 1 after halving');
+    assert.equal(errors.length, 2); assert.deepEqual([errors[1].status, errors[1].dropped], [413, 1]);
+    assert.deepEqual(sent[2].events.map(event => event.event), ['a']);
+  } finally { sdk.destroy(); }
+});
+
+test('413: after an accepted batch the next batch uses the full batchSize again', async t => {
+  browser('https://example.com/');
+  const statuses = [413]; const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(statuses[sent.length - 1] ?? 202); });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 20 });
+  try {
+    for (let i = 0; i < 20; i++) sdk.track(`e${i}`); // a full batch: sent at once
+    await tick();
+    assert.deepEqual(sent.map(body => body.events.length), [20, 10]);
+    for (let i = 20; i < 35; i++) sdk.track(`e${i}`);
+    await tick(); await sdk.flush();
+    assert.equal(sent[2].events.length, 20, 'full size after the 202');
+    assert.deepEqual(sent.slice(1).flatMap(body => body.events.map(event => event.event)), Array.from({ length: 35 }, (_, i) => `e${i}`), 'no event lost or sent twice');
+  } finally { sdk.destroy(); }
+});
+
+test('413: not counted as a retry; events that already had a server error are not dropped by it', async t => {
+  browser('https://example.com/');
+  const statuses = [503, 413, 202, 202]; const sent = []; const errors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return response(statuses[sent.length - 1] ?? 202); });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, retryCount: 1, errorHandler: error => errors.push(error) });
+  try {
+    sdk.track('a'); sdk.track('b');
+    await sdk.flush(); // 503: one retry used
+    await sdk.flush(); // 413, then 1 event: 202
+    await sdk.flush(); // the other event: 202
+    assert.deepEqual(sent.map(body => body.events.length), [2, 2, 1, 1]);
+    assert.equal(errors.length, 0);
+  } finally { sdk.destroy(); }
+});
+
+test('413 on the pagehide keepalive send: no second send on that page; the next normal send uses half', async t => {
+  const { window } = browser('https://example.com/');
+  const statuses = [413]; const sent = []; const errors = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push({ body: JSON.parse(init.body), init }); return response(statuses[sent.length - 1] ?? 202); });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, batchSize: 30, errorHandler: error => errors.push(error) });
+  try {
+    for (let i = 0; i < 20; i++) sdk.track(`e${i}`);
+    window.dispatchEvent(new Event('pagehide')); await tick();
+    assert.equal(sent.length, 1); assert.equal(sent[0].init.keepalive, true);
+    await sdk.flush();
+    assert.equal(sent.length, 2); assert.equal(sent[1].init.keepalive, false);
+    assert.deepEqual(sent[1].body.events.map(event => event.message_id), sent[0].body.events.slice(0, 10).map(event => event.message_id));
+    await sdk.flush();
+    assert.deepEqual(sent[2].body.events.map(event => event.message_id), sent[0].body.events.slice(10).map(event => event.message_id));
+    assert.equal(errors.length, 0);
+  } finally { sdk.destroy(); }
 });
 
 test('retry: network errors (offline) are not counted; the events wait until the network is back', async t => {
