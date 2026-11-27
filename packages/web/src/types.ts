@@ -148,6 +148,14 @@ export interface AnalyticsOptions {
    * not send in its time stay stored.
    */
   persistQueue?: boolean;
+  /**
+   * Game mode: a main thread blocked for this many milliseconds is a hang,
+   * sent as an `error` with `error_type` `app_hang` and `hang_duration_ms`,
+   * when the thread runs again. Default 5000; 0 turns hang detection off;
+   * other values are kept between 1000 and 60000. No hang is reported while
+   * the page is hidden or just after it becomes visible.
+   */
+  hangThresholdMs?: number;
 }
 
 /** The request of link(): a Steam ticket from `GetAuthTicketForWebApi("manalens")`, as hex. */

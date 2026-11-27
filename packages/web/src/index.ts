@@ -3,6 +3,7 @@ import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, randomId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
 import { readLocal, removeLocal, storageKey, writeLocal } from './storage';
 import { BREADCRUMBS, cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
+import { HANG_THRESHOLD_MS, HangWatchdog, hangPlace, MAX_HANG_THRESHOLD_MS, MIN_HANG_THRESHOLD_MS, type Hang } from './hang';
 import { CRASH_ALIVE_MS, CRASH_HEARTBEAT_MS, removeTab, takeCrashed, takeStillSilent, writeTab, type TabEntry } from './crash';
 import { PersistentQueue } from './queue';
 import { hostExcluded, pathExcluded, timezoneExcluded, type TrackingOptions } from './tracking';
@@ -56,7 +57,7 @@ function resolvePublishableKey(options: Pick<AnalyticsOptions, 'publishableKey'>
   return key;
 }
 
-type ResolvedOptions = Omit<AnalyticsOptions, 'tracking' | 'game' | 'persistQueue'> & { publishableKey: string; tracking?: TrackingOptions } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
+type ResolvedOptions = Omit<AnalyticsOptions, 'tracking' | 'game' | 'persistQueue' | 'hangThresholdMs'> & { publishableKey: string; tracking?: TrackingOptions } & Required<Pick<AnalyticsOptions, 'autoPageviews' | 'batchSize' | 'flushIntervalMs' | 'disabled' | 'crossSubdomainCookies' | 'retryCount' | 'maxQueueSize'>>;
 
 /** Queue limits, as in getformo/sdk's EventQueue. */
 const MAX_QUEUE_BYTES = 500 * 1024;
@@ -167,8 +168,10 @@ export class Analytics {
   private restoring?: Promise<void>;
   /** game_open was sent for this page load (and this identity). */
   private gameOpened = false;
-  /** The game session of the last event: its ID, start and last activity (ms). */
-  private gameSession?: { id: string; startedAt: number; lastAt: number };
+  /** The game session of the last event: its ID, start and last activity (ms), and the message_id of its last app_hang. */
+  private gameSession?: { id: string; startedAt: number; lastAt: number; hangMessageId?: string };
+  /** Game mode: the main-thread watchdog (P-2833); undefined when hangThresholdMs is 0. */
+  private readonly hangWatchdog?: HangWatchdog;
   /** First open when localStorage is not available: page memory only. */
   private firstOpenMemory?: string;
   private readonly errorLimits = new ErrorLimiter();
@@ -272,6 +275,8 @@ export class Analytics {
     const key = (name: string) => storageKey(this.options.publishableKey, name);
     this.keys = { anonymousId: key('anonymous-id'), sessionId: key('session-id'), userId: key('user-id'), optOut: key('opt-out'), firstOpen: key('first-open'), gameState: key('game-state') };
     if (persistQueue === true && this.app) this.persist = new PersistentQueue(key('queue'));
+    const hangThresholdMs = resolveHangThreshold(options.hangThresholdMs);
+    if (this.game && hangThresholdMs > 0) this.hangWatchdog = new HangWatchdog(hangThresholdMs, hang => { try { this.recordHang(hang); } catch { /* Never throw from the watchdog. */ } });
     this.start();
     if (options.ready) {
       try { options.ready(this); } catch (error) { console.error('[Manalens] Error in the ready callback:', error); }
@@ -307,6 +312,7 @@ export class Analytics {
       window.addEventListener('focus', this.onFocusChange);
       window.addEventListener('blur', this.onFocusChange);
       this.heartbeat = setInterval(() => this.saveTab(), CRASH_HEARTBEAT_MS);
+      this.hangWatchdog?.start();
       this.startGame();
     }
     this.sendHandoff();
@@ -807,6 +813,7 @@ export class Analytics {
       focused: this.pageFocused(),
       ...(this.app?.build ? { build: this.app.build } : {}),
       ...(this.app?.app_version ? { app_version: this.app.app_version } : {}),
+      ...(session.hangMessageId ? { hang_message_id: session.hangMessageId } : {}),
     };
     writeTab(this.keys.gameState, this.tabId, entry);
     this.tabSaved = true;
@@ -844,6 +851,8 @@ export class Analytics {
     const properties: AnalyticsEvent['properties'] = { previous_session_id: entry.session_id };
     if (entry.build) properties.previous_build = entry.build;
     if (entry.app_version) properties.previous_app_version = entry.app_version;
+    // The crash links to the last hang of that session.
+    if (entry.hang_message_id) properties.hang_message_id = entry.hang_message_id;
     const ids = { anonymous_id: entry.anonymous_id, session_id: entry.session_id, ...(entry.user_id ? { user_id: entry.user_id } : {}) };
     this.logger.log('info', 'The last game session did not end cleanly: app_crash');
     this.push(this.build('track', 'app_crash', properties, new Date(entry.at).toISOString(), ids));
@@ -902,6 +911,32 @@ export class Analytics {
     if (!this.errorLimits.allow(String(properties.fingerprint), input.source)) { this.logger.log('debug', 'Error dropped by the error limits'); return undefined; }
     // Game mode: the breadcrumbs are read after the identity, so they include a session_start that this error starts.
     return this.enqueue('track', 'error', () => this.game && this.breadcrumbs.length ? errorProperties({ ...input, fingerprint: String(properties.fingerprint), breadcrumbs: this.breadcrumbs.join(',') }) : properties);
+  }
+
+  /**
+   * The main thread was blocked for at least hangThresholdMs (P-2833): an
+   * `error` with `error_type` `app_hang`, the same limits as other captured
+   * errors. Its message_id goes into the saved session state, so an
+   * `app_crash` of this session at the next load has it in `hang_message_id`.
+   */
+  private recordHang(hang: Hang): void {
+    if (!this.game || !this.active() || this.closing) return;
+    const durationMs = Math.round(hang.durationMs);
+    const place = hangPlace(hang.scripts, cleanFile, cleanMessage);
+    const event = this.recordError({
+      message: `The main thread was blocked for ${(durationMs / 1000).toFixed(1)} s`,
+      severity: 'error',
+      errorType: 'app_hang',
+      handled: false,
+      source: 'auto',
+      file: place.file,
+      fn: place.fn,
+      stack: place.stack,
+      properties: { hang_duration_ms: durationMs },
+    });
+    if (!event || !this.gameSession || event.session_id !== this.gameSession.id) return;
+    this.gameSession.hangMessageId = event.message_id;
+    this.saveTab();
   }
 
   /** window `error`: an uncaught error. The message, stack and file lose personal data before they are queued. */
@@ -1191,6 +1226,7 @@ export class Analytics {
     this.identityGeneration++;
     if (this.timer) clearInterval(this.timer);
     if (this.heartbeat) clearInterval(this.heartbeat);
+    this.hangWatchdog?.stop();
     if (this.crashRecheck) clearTimeout(this.crashRecheck);
     this.crashRecheck = undefined;
     // A stop by the game (shutdown() or destroy()) is a clean end, not a crash.
@@ -1267,10 +1303,17 @@ function installHistoryHooksOnce(): void {
   }
 }
 
-/** The options without game and persistQueue, which the constructor resolves itself. */
-function withoutGameOptions(options: AnalyticsOptions): Omit<AnalyticsOptions, 'game' | 'persistQueue'> {
-  const { game: _game, persistQueue: _persistQueue, ...rest } = options;
+/** The options without game, persistQueue and hangThresholdMs, which the constructor resolves itself. */
+function withoutGameOptions(options: AnalyticsOptions): Omit<AnalyticsOptions, 'game' | 'persistQueue' | 'hangThresholdMs'> {
+  const { game: _game, persistQueue: _persistQueue, hangThresholdMs: _hang, ...rest } = options;
   return rest;
+}
+
+/** hangThresholdMs: default 5000; 0 (or less) turns hang detection off; else 1000 to 60000. */
+function resolveHangThreshold(value: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return HANG_THRESHOLD_MS;
+  if (value <= 0) return 0;
+  return Math.min(MAX_HANG_THRESHOLD_MS, Math.max(MIN_HANG_THRESHOLD_MS, Math.floor(value)));
 }
 
 /** An Error, or an object with a string message (errors from another realm). */

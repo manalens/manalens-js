@@ -27,6 +27,8 @@ if (typeof document !== 'undefined') {
       // data-game="true": game mode (needs data-app-platform). data-persist-queue="true" or "false".
       game: script?.dataset.game === 'true',
       ...(script?.dataset.persistQueue === 'true' || script?.dataset.persistQueue === 'false' ? { persistQueue: script.dataset.persistQueue === 'true' } : {}),
+      // data-hang-threshold-ms="0" turns hang detection off; a number of milliseconds changes the limit.
+      ...(script?.dataset.hangThresholdMs !== undefined && script.dataset.hangThresholdMs !== '' && Number.isFinite(Number(script.dataset.hangThresholdMs)) ? { hangThresholdMs: Number(script.dataset.hangThresholdMs) } : {}),
     });
     // The snippet form of the ready option: listen on window for this event.
     if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('manalens:ready', { detail: window.manalens }));

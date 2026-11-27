@@ -32,6 +32,8 @@ export interface TabEntry {
   focused: boolean;
   build?: string;
   app_version?: string;
+  /** The message_id of the last `app_hang` error of this session (P-2833). */
+  hang_message_id?: string;
 }
 
 export type TabEntries = Record<string, TabEntry>;
@@ -57,6 +59,7 @@ export function readTabs(key: string): TabEntries {
       focused: entry.focused === true,
       ...(typeof entry.build === 'string' && entry.build ? { build: entry.build.slice(0, 64) } : {}),
       ...(typeof entry.app_version === 'string' && entry.app_version ? { app_version: entry.app_version.slice(0, 32) } : {}),
+      ...(id(entry.hang_message_id) ? { hang_message_id: entry.hang_message_id } : {}),
     };
   }
   return tabs;

@@ -2260,6 +2260,161 @@ test('breadcrumbs: reset() and setConsent(false) clear them, as in the game SDKs
   } finally { sdk.destroy(); }
 });
 
+// P-2833: hang detection. Node has no longtask or long-animation-frame entries, so these tests use the timer fallback,
+// except the last one, which gives the SDK a PerformanceObserver stand-in.
+/** A page with visibility events, a mocked clock (Date and timers) and performance.now() that follows it, less `asleep`. */
+function hangPage(t, url = 'https://game.example/') {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval', 'setTimeout'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const page = browser(url, { local: memoryStorage() });
+  const events = new EventTarget();
+  Object.assign(page.document, { visibilityState: 'visible', hasFocus: () => true, addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events), dispatchEvent: events.dispatchEvent.bind(events) });
+  const base = Date.now();
+  const clock = { asleep: 0 };
+  t.mock.method(performance, 'now', () => Date.now() - base - clock.asleep);
+  /** The main thread is blocked for `ms`: the clocks move, no timer runs; then the next tick runs. */
+  const block = ms => { t.mock.timers.setTime(Date.now() + ms); t.mock.timers.tick(500); };
+  const run = ms => { for (let i = 0; i < ms / 500; i++) t.mock.timers.tick(500); };
+  const show = state => { page.document.visibilityState = state; page.document.dispatchEvent(new Event('visibilitychange')); };
+  return { ...page, clock, block, run, show };
+}
+const hangs = events => named(events, 'error').filter(event => event.properties.error_type === 'app_hang');
+
+test('hang detection: a main thread blocked for 5 s or more sends an app_hang error when it runs again (P-2833)', async t => {
+  const { block, run } = hangPage(t);
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    run(3000);
+    block(3000);
+    sdk.track('level_start');
+    block(6000);
+    await sdk.flush();
+    const [hang, ...more] = hangs(eventsOf(sent));
+    assert.equal(more.length, 0, 'the 3 s block is under the limit');
+    assert.deepEqual(hang.properties, {
+      severity: 'error', message: 'The main thread was blocked for 6.0 s', handled: false, source: 'auto',
+      fingerprint: errorFingerprint('app_hang', 'The main thread was blocked for 9.9 s', '', ''), error_type: 'app_hang',
+      breadcrumbs: 'session_start,game_open,level_start', hang_duration_ms: 6000,
+    });
+    assert.equal(hang.original_timestamp, new Date(Date.now()).toISOString(), 'sent when the thread runs again');
+  } finally { sdk.destroy(); }
+});
+
+test('hang detection: never while the page is hidden or just visible again, and not for a sleep of the computer', async t => {
+  const { block, run, show, clock } = hangPage(t);
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    show('hidden');
+    run(2000);
+    block(60_000); // a background tab: timers throttled
+    show('visible');
+    block(8000); // the first late tick just after the page is visible
+    run(2000);
+    // A sleep: the wall clock moves, the monotonic clock stops.
+    clock.asleep += 30_000; block(30_000);
+    run(2000);
+    // A sleep where the monotonic clock moves too: longer than 10 minutes.
+    block(11 * 60_000);
+    run(2000);
+    await sdk.flush();
+    assert.equal(hangs(eventsOf(sent)).length, 0);
+    block(5000);
+    await sdk.flush();
+    assert.equal(hangs(eventsOf(sent)).length, 1, 'a hang on a visible page is still found after all that');
+  } finally { sdk.destroy(); }
+});
+
+test('hang detection: hangThresholdMs changes the limit, 0 turns it off; websites have none', async t => {
+  const { block, run } = hangPage(t);
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const off = new Analytics(gameOptions({ persistQueue: false, hangThresholdMs: 0 }));
+  try { run(1000); block(20_000); await off.flush(); assert.equal(hangs(eventsOf(sent)).length, 0, 'off'); } finally { off.destroy(); }
+  const web = new Analytics({ publishableKey: 'mana_pk_web', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: gameApp });
+  try { run(1000); block(20_000); await web.flush(); assert.equal(hangs(eventsOf(sent)).length, 0, 'website mode'); } finally { web.destroy(); }
+  const low = new Analytics(gameOptions({ persistQueue: false, hangThresholdMs: 2000 }));
+  try {
+    run(1000); block(1800);
+    run(1000); block(2500);
+    await low.flush();
+    assert.deepEqual(hangs(eventsOf(sent)).map(event => event.properties.hang_duration_ms), [2500]);
+  } finally { low.destroy(); }
+});
+
+test('hang detection: an app_crash after a hang has its message_id in hang_message_id', async t => {
+  const { block, run, local } = hangPage(t);
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const first = new Analytics(gameOptions({ persistQueue: false }));
+  run(1000); block(7000);
+  await first.flush();
+  const [hang] = hangs(eventsOf(sent));
+  assert.equal(Object.values(gameState(local))[0].hang_message_id, hang.message_id, 'saved at once');
+  run(1000);
+  crash(first, local);
+  t.mock.timers.tick(60_000);
+  sent.length = 0;
+  const next = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    await next.flush();
+    const [appCrash] = named(eventsOf(sent), 'app_crash');
+    assert.equal(appCrash.properties.hang_message_id, hang.message_id);
+    assert.equal(appCrash.properties.previous_session_id, hang.session_id);
+    // The new session has no hang: a crash of it would carry none.
+    assert.equal(Object.values(gameState(local))[0].hang_message_id, undefined);
+  } finally { next.destroy(); }
+});
+
+test('hang detection: with long-animation-frame entries, the script that ran longest gives the place and the stack', async t => {
+  const { show } = hangPage(t);
+  const original = globalThis.PerformanceObserver;
+  const observers = [];
+  globalThis.PerformanceObserver = class {
+    static supportedEntryTypes = ['longtask', 'long-animation-frame'];
+    constructor(callback) { this.callback = callback; this.disconnected = false; observers.push(this); }
+    observe(options) { this.options = options; }
+    disconnect() { this.disconnected = true; }
+    emit(entry) { this.callback({ getEntries: () => [entry] }); }
+  };
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics(gameOptions({ persistQueue: false }));
+  try {
+    const [observer] = observers;
+    assert.equal(observer.options.type, 'long-animation-frame');
+    t.mock.timers.tick(5000);
+    observer.emit({ startTime: 4000, duration: 4000, scripts: [] }); // under the limit
+    observer.emit({ startTime: 4500, duration: 7000, scripts: [
+      { duration: 40, invoker: 'https://game.example/x.js?token=abc', sourceURL: 'https://game.example/x.js?token=abc', sourceFunctionName: '' },
+      { duration: 6900, invoker: 'FrameRequestCallback', sourceURL: 'https://game.example/assets/game.js?v=3', sourceFunctionName: 'updatePhysics' },
+    ] });
+    show('hidden'); show('visible');
+    observer.emit({ startTime: performance.now() - 200, duration: 9000, scripts: [] }); // just visible again
+    await sdk.flush();
+    const [hang, ...more] = hangs(eventsOf(sent));
+    assert.equal(more.length, 0);
+    assert.equal(hang.properties.hang_duration_ms, 7000);
+    assert.equal(hang.properties.file, '/assets/game.js');
+    assert.equal(hang.properties.function, 'updatePhysics');
+    assert.equal(hang.properties.fingerprint, errorFingerprint('app_hang', '', '/assets/game.js', 'updatePhysics'));
+    assert.equal(hang.properties.stack, 'at updatePhysics (/assets/game.js)\n    at https://game.example/x.js (/x.js)');
+    assert.ok(!JSON.stringify(hang).includes('token'));
+  } finally { sdk.destroy(); globalThis.PerformanceObserver = original; }
+  assert.ok(observers[0].disconnected, 'destroy() stops the observer');
+});
+
+test('snippet: data-hang-threshold-ms sets the limit', async t => {
+  const { window, document, block, run } = hangPage(t);
+  document.currentScript = { dataset: { publishableKey: 'mana_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', game: 'true', persistQueue: 'false', autoPageviews: 'false', hangThresholdMs: '0' } };
+  const sent = [];
+  const code = await readFile(new URL('../dist/snippet.global.js', import.meta.url), 'utf8');
+  vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, TextEncoder, performance, Date, setInterval, clearInterval, setTimeout, clearTimeout, fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; } });
+  try {
+    run(1000); block(20_000);
+    await window.manalens.flush();
+    assert.ok(named(eventsOf(sent.map(body => ({ body }))), 'game_open').length === 1);
+    assert.equal(hangs(eventsOf(sent.map(body => ({ body })))).length, 0);
+  } finally { window.manalens.destroy(); }
+});
+
 test('snippet: data-game and data-app-platform turn on game mode', async () => {
   const { window, document } = browser('https://game.example/');
   document.currentScript = { dataset: { publishableKey: 'mana_pk_snippet', endpoint: 'https://collector.example', appPlatform: 'web', game: 'true', persistQueue: 'false', autoPageviews: 'false' } };

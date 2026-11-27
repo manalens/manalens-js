@@ -123,6 +123,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
 | `game` | `false` | Game mode: `game_open`, `session_start` / `session_end` and captured errors. Needs `app`. See [Game mode](#game-mode). Snippet: `data-game="true"` |
 | `persistQueue` | `true` in game mode, else `false` | Keep unsent events in IndexedDB (else localStorage) for the next load. Needs `app`. See [Persistent queue](#persistent-queue). Snippet: `data-persist-queue` |
+| `hangThresholdMs` | `5000` | Game mode: a main thread blocked this many milliseconds is a hang (`app_hang`). `0` turns hang detection off; other values are kept between 1000 and 60000. See [Hangs](#hangs). Snippet: `data-hang-threshold-ms` |
 
 **Delivery.** Events wait in memory and are sent in batches. They go to
 browser storage only with the `persistQueue` option (a game with `app`; see
@@ -488,7 +489,7 @@ them:
 | `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
 | `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `shutdown()`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
 | `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack`, `breadcrumbs` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
-| `app_crash` | `previous_session_id`, and `previous_build`, `previous_app_version` when the `app` option has them | At the next load, when a tab of the game closed without `pagehide` (for example a tab that ran out of memory) while it was visible and had focus. It is sent in the session that crashed, with the time of its last saved state |
+| `app_crash` | `previous_session_id`, and `previous_build`, `previous_app_version` when the `app` option has them, and `hang_message_id` when the session had an `app_hang` | At the next load, when a tab of the game closed without `pagehide` (for example a tab that ran out of memory) while it was visible and had focus. It is sent in the session that crashed, with the time of its last saved state |
 
 - **Sessions** use the web session rules above (30 minutes idle, 24 hours at
   most), with no second clock. Each start is a new session. While the page is
@@ -579,6 +580,29 @@ Options: `severity` (`debug`, `info`, `warning`, `error` (default),
   skips only this last limit). The next `session_end` has the number of
   dropped errors in `errors_dropped`. `message` and `stack` are at most 1024
   characters; the properties at most 50 keys and 8 KB of JSON.
+
+### Hangs
+
+In game mode the SDK watches the main thread. When it was blocked for at
+least `hangThresholdMs` (default 5000 ms), the SDK sends an `error` when the
+thread runs again: `error_type` `app_hang`, `severity` `error`, `handled`
+`false`, `source` `auto`, the message `The main thread was blocked for 6.2 s`,
+and `hang_duration_ms`. The error limits of other captured errors apply.
+
+- Where the browser has `long-animation-frame` entries (Chromium), the script
+  that ran longest gives `file` and `function`, and `stack` lists the scripts
+  of the frame (without query and fragment). Where it has only `longtask`
+  entries, or neither (Firefox, Safari: a timer every 500 ms that runs late),
+  there is no place and no stack: the hangs then group by their message.
+- Background tabs throttle and freeze timers, so no hang is reported while
+  the page is hidden or frozen, or in the first second after it becomes
+  visible. A gap of more than 10 minutes, or one where the wall clock and the
+  monotonic clock do not agree, is a sleep of the computer, not a hang.
+- A hang that never ends cannot be reported: a blocked page runs no code. If
+  the tab then crashes, the next load sends `app_crash` without
+  `hang_message_id`. If the game crashes after a hang that ended, the
+  `app_crash` has the `message_id` of that `app_hang` error in
+  `hang_message_id`.
 
 ### Persistent queue
 
