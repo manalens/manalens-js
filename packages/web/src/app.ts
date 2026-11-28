@@ -15,6 +15,8 @@
 export const appPlatforms = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'ps5', 'xbox_series', 'xbox_one', 'switch', 'switch2', 'other'] as const;
 export const appStorefronts = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'psn', 'xbox', 'nintendo', 'other'] as const;
 export const appEngines = ['godot', 'unity', 'unreal', 'other'] as const;
+/** A device the user agent cannot show (P-2882). Reports show it as Device; `platform` stays the OS. */
+export const appDevices = ['steam_deck'] as const;
 
 export interface AppInfo {
   platform: (typeof appPlatforms)[number];
@@ -24,10 +26,12 @@ export interface AppInfo {
   /** Build number or label. 1 to 64 characters, same characters as app_version. */
   build?: string;
   engine?: (typeof appEngines)[number];
+  /** `steam_deck` on a Steam Deck (Steam sets the environment variable `SteamDeck=1`; an Electron main process can read it). */
+  device?: (typeof appDevices)[number];
 }
 
 const label = /^[A-Za-z0-9._+\- ]+$/;
-const keys = new Set(['platform', 'storefront', 'app_version', 'build', 'engine']);
+const keys = new Set(['platform', 'storefront', 'app_version', 'build', 'engine', 'device']);
 
 /** Why an app object is not valid, or null when it is. */
 export function appInfoProblem(app: unknown): string | null {
@@ -37,6 +41,7 @@ export function appInfoProblem(app: unknown): string | null {
   if (!(appPlatforms as readonly unknown[]).includes(value.platform)) return `app.platform must be one of ${appPlatforms.join(', ')}`;
   if (value.storefront !== undefined && !(appStorefronts as readonly unknown[]).includes(value.storefront)) return `app.storefront must be one of ${appStorefronts.join(', ')}`;
   if (value.engine !== undefined && !(appEngines as readonly unknown[]).includes(value.engine)) return `app.engine must be one of ${appEngines.join(', ')}`;
+  if (value.device !== undefined && !(appDevices as readonly unknown[]).includes(value.device)) return `app.device must be one of ${appDevices.join(', ')}`;
   for (const [key, max] of [['app_version', 32], ['build', 64]] as const) {
     const field = value[key];
     if (field === undefined) continue;
@@ -57,6 +62,7 @@ export function resolveAppInfo(app: unknown, warn: (message: string) => void = m
     ...(value.app_version ? { app_version: value.app_version } : {}),
     ...(value.build ? { build: value.build } : {}),
     ...(value.engine ? { engine: value.engine } : {}),
+    ...(value.device ? { device: value.device } : {}),
   };
 }
 
@@ -69,5 +75,6 @@ export function appInfoFromDataset(dataset: Record<string, string | undefined>):
     ...(dataset.appVersion ? { app_version: dataset.appVersion } : {}),
     ...(dataset.appBuild ? { build: dataset.appBuild } : {}),
     ...(dataset.appEngine ? { engine: dataset.appEngine } : {}),
+    ...(dataset.appDevice ? { device: dataset.appDevice } : {}),
   };
 }

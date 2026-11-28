@@ -103,6 +103,8 @@ export class Manalens {
     }
     if (mode === 'app') {
       if (!this.app) throw new Error('app mode needs the app option, for example { platform: "windows" }');
+      // P-2882: Steam sets SteamDeck=1 on a Steam Deck (also for an Electron main process).
+      if (this.app.device === undefined && process.env.SteamDeck === '1') this.app = { ...this.app, device: 'steam_deck' };
       if (options.anonymousId !== undefined && !isUUID(options.anonymousId)) throw new Error('anonymousId must be a UUID');
       this.anonymousId = options.anonymousId ?? randomUUID();
       this.locale = options.locale;

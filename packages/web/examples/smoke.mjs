@@ -1265,6 +1265,24 @@ test('app option: the longest valid labels pass, and a copy is sent (later chang
   } finally { sdk.destroy(); }
 });
 
+test('app option: device steam_deck is sent; an unknown device drops the app object (P-2882)', async t => {
+  browser('https://game.example/');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: { platform: 'web', storefront: 'steam', device: 'steam_deck' } });
+  try {
+    await sdk.flush();
+    assert.deepEqual(eventsOf(sent)[0].context.app, { platform: 'web', storefront: 'steam', device: 'steam_deck' });
+  } finally { sdk.destroy(); }
+  const warnings = []; t.mock.method(console, 'warn', message => warnings.push(message));
+  const other = []; t.mock.method(globalThis, 'fetch', collector(other));
+  const bad = new Analytics({ publishableKey: 'mana_pk_game', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: { platform: 'web', device: 'rog_ally' } });
+  try {
+    await bad.flush();
+    assert.equal(eventsOf(other)[0].context.app, undefined);
+    assert.ok(warnings.some(message => /app\.device/.test(message)));
+  } finally { bad.destroy(); }
+});
+
 // G-2525: the app-channel delivery spec of the game SDKs (manalens sdks/SPEC.md).
 // examples/fixtures/app-event.json is a copy of one event of the shared request
 // fixtures (manalens sdks/unity/Tests~/fixtures/request-1.json). Update it by

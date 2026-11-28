@@ -37,6 +37,9 @@
       "unity",
       "unreal",
       "other"
+    ],
+    "devices": [
+      "steam_deck"
     ]
   },
   "batch_limits": {

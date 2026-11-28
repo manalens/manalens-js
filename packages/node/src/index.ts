@@ -7,7 +7,7 @@
 
 export { Manalens, SDK_VERSION, PROTECTED_TRAITS } from './Manalens.js';
 export { ValidationError } from './validators/index.js';
-export { APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES } from './types/index.js';
+export { APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES, APP_DEVICES } from './types/index.js';
 export type {
   Mode,
   AnalyticsOptions,

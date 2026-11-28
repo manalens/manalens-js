@@ -469,13 +469,14 @@ analytics.track('game_open', { is_first_open: true });
 | `app_version` | 1 to 32 characters: letters, digits, `.`, `_`, `+`, `-` and space |
 | `build` | 1 to 64 characters, same characters as `app_version` |
 | `engine` | `godot`, `unity`, `unreal`, `other` |
+| `device` | `steam_deck` on a Steam Deck. Reports show it as Device `steam_deck`; `platform` stays the OS. An Electron app can read `process.env.SteamDeck === '1'` in its main process, or add ` SteamDeck` to its user agent. |
 
 These are the collector's own rules. An invalid object would make the collector
 refuse every event, so the SDK drops it, writes one `console.warn`, and sends
 plain web events. The SDK sends a copy: later changes to the object do nothing.
 
 Snippet: `data-app-platform` (required for the others to apply),
-`data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`.
+`data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`, `data-app-device`.
 
 With `game: true` the SDK sends `game_open`, `session_start`, `session_end`,
 `error` and `game_crash` for you; see [Game mode](#game-mode). For the other
@@ -708,7 +709,7 @@ console logs. Add the `data-app-*` attributes for a browser game (see above).
 | `data-require-consent="true"` | `requireConsent: true` |
 | `data-auto-pageviews="false"` | `autoPageviews: false` |
 | `data-debug="true"` | `logger: { enabled: true }` |
-| `data-app-platform`, `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine` | `app` |
+| `data-app-platform`, `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`, `data-app-device` | `app` |
 | `data-game="true"` | `game: true` (needs `data-app-platform`) |
 | `data-persist-queue="true"` or `"false"` | `persistQueue` |
 

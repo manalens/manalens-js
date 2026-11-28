@@ -22,7 +22,7 @@ if (typeof document !== 'undefined') {
       autoPageviews: script?.dataset.autoPageviews !== 'false',
       // data-debug="true": console logs at every level.
       ...(script?.dataset.debug === 'true' ? { logger: { enabled: true } } : {}),
-      // data-app-platform, data-app-storefront, data-app-version, data-app-build, data-app-engine
+      // data-app-platform, data-app-storefront, data-app-version, data-app-build, data-app-engine, data-app-device
       app: appInfoFromDataset(script?.dataset ?? {}) as AnalyticsOptions['app'],
       // data-game="true": game mode (needs data-app-platform). data-persist-queue="true" or "false".
       game: script?.dataset.game === 'true',

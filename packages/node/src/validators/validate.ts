@@ -6,7 +6,7 @@
 
 import { isIP } from 'node:net';
 import { isNonEmptyString, isObject, isOneOf, isString, isUUID } from './checks.js';
-import { APP_ENGINES, APP_PLATFORMS, APP_STOREFRONTS, BROWSERS, DEVICES, OSES, type Mode, type WireEvent } from '../types/index.js';
+import { APP_DEVICES, APP_ENGINES, APP_PLATFORMS, APP_STOREFRONTS, BROWSERS, DEVICES, OSES, type Mode, type WireEvent } from '../types/index.js';
 
 export class ValidationError extends Error {
   constructor(
@@ -74,11 +74,12 @@ export function checkProperties(field: string, value: unknown): void {
 export function checkApp(value: unknown, field = 'context.app'): void {
   if (!isObject(value)) fail(field, 'must be an object');
   for (const key of Object.keys(value)) {
-    if (!['platform', 'storefront', 'app_version', 'build', 'engine'].includes(key)) fail(`${field}.${key}`, 'is not a known key');
+    if (!['platform', 'storefront', 'app_version', 'build', 'engine', 'device'].includes(key)) fail(`${field}.${key}`, 'is not a known key');
   }
   if (!isOneOf(value.platform, APP_PLATFORMS)) fail(`${field}.platform`, `must be one of ${APP_PLATFORMS.join(', ')}`);
   if (value.storefront !== undefined && !isOneOf(value.storefront, APP_STOREFRONTS)) fail(`${field}.storefront`, `must be one of ${APP_STOREFRONTS.join(', ')}`);
   if (value.engine !== undefined && !isOneOf(value.engine, APP_ENGINES)) fail(`${field}.engine`, `must be one of ${APP_ENGINES.join(', ')}`);
+  if (value.device !== undefined && !isOneOf(value.device, APP_DEVICES)) fail(`${field}.device`, `must be one of ${APP_DEVICES.join(', ')}`);
   for (const [key, max] of [['app_version', LIMITS.appVersion], ['build', LIMITS.build]] as const) {
     const item = value[key];
     if (item === undefined) continue;

@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { Manalens, SDK_VERSION, APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES } from '../dist/esm/index.js';
+import { Manalens, SDK_VERSION, APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES, APP_DEVICES } from '../dist/esm/index.js';
 import { retryDelay, parseRetryAfter, isRetryableStatus, refusedEvents } from '../dist/esm/queue/index.js';
 import { isWellFormedKey, keyChecksum } from '../dist/esm/utils/keys.js';
 
@@ -466,6 +466,27 @@ test('contract: app enums match the collector', () => {
   assert.deepEqual([...APP_PLATFORMS], contract.app_enums.platforms);
   assert.deepEqual([...APP_STOREFRONTS], contract.app_enums.storefronts);
   assert.deepEqual([...APP_ENGINES], contract.app_enums.engines);
+  assert.deepEqual([...APP_DEVICES], contract.app_enums.devices);
+});
+
+test('app mode adds context.app.device steam_deck when SteamDeck=1 (P-2882)', async () => {
+  const before = process.env.SteamDeck;
+  try {
+    process.env.SteamDeck = '1';
+    const deck = client(PUBLISHABLE, { mode: 'app', app: { platform: 'linux', storefront: 'steam' } });
+    deck.analytics.track({ event: 'game_open' });
+    await deck.analytics.flush();
+    assert.deepEqual(deck.calls[0].body.events[0].context.app, { platform: 'linux', storefront: 'steam', device: 'steam_deck' });
+    assertCollectorAccepts(deck.calls[0].body);
+    delete process.env.SteamDeck;
+    const plain = client(PUBLISHABLE, { mode: 'app', app: { platform: 'linux' } });
+    plain.analytics.track({ event: 'game_open' });
+    await plain.analytics.flush();
+    assert.deepEqual(plain.calls[0].body.events[0].context.app, { platform: 'linux' });
+    assert.throws(() => new Manalens(PUBLISHABLE, { endpoint: ENDPOINT, mode: 'app', app: { platform: 'linux', device: 'rog_ally' } }), /device/);
+  } finally {
+    if (before === undefined) delete process.env.SteamDeck; else process.env.SteamDeck = before;
+  }
 });
 
 test('contract: key format matches the collector', () => {

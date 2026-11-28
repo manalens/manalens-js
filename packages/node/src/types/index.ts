@@ -11,7 +11,9 @@ export type Properties = Record<string, PropertyValue>;
 export const APP_PLATFORMS = ['windows', 'macos', 'linux', 'web', 'android', 'ios', 'ps5', 'xbox_series', 'xbox_one', 'switch', 'switch2', 'other'] as const;
 export const APP_STOREFRONTS = ['steam', 'itch', 'epic', 'gog', 'app_store', 'play', 'psn', 'xbox', 'nintendo', 'other'] as const;
 export const APP_ENGINES = ['godot', 'unity', 'unreal', 'other'] as const;
-export const DEVICES = ['desktop', 'mobile', 'tablet'] as const;
+/** `context.app.device`: a device the user agent cannot show (P-2882). Reports show it as Device; `platform` stays the OS. */
+export const APP_DEVICES = ['steam_deck'] as const;
+export const DEVICES = ['desktop', 'mobile', 'tablet', 'steam_deck'] as const;
 export const OSES = ['windows', 'macos', 'ios', 'android', 'linux', 'other'] as const;
 export const BROWSERS = ['chrome', 'safari', 'firefox', 'edge', 'opera', 'other'] as const;
 
@@ -24,6 +26,8 @@ export interface AppInfo {
   /** Printable label, up to 64 characters, for example `571`. */
   build?: string;
   engine?: (typeof APP_ENGINES)[number];
+  /** `steam_deck` on a Steam Deck. In app mode the SDK sets it when the environment variable `SteamDeck` is `1`. */
+  device?: (typeof APP_DEVICES)[number];
 }
 
 /**
