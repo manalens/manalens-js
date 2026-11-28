@@ -257,12 +257,13 @@ createAnalytics({
   their renamed forms (for example `Asia/Kolkata` and `Asia/Calcutta`).
 - An `identify()` on an excluded page is held and sent with the first event on
   an allowed page. A campaign from an excluded landing page is not carried.
-- `excludeQueryParams`: query parameter names the SDK never reads,
-  case-insensitive. The SDK never sends a full query string or fragment: page
-  URLs are origin and path, and a referrer is an origin. It reads only the
-  campaign parameters (see [Ad and campaign attribution](#ad-and-campaign-attribution)).
-  Name one here to keep it out of every event, for example `['ref']` or
-  `['gclid']`.
+- `excludeQueryParams`: query parameter names the SDK never sends,
+  case-insensitive. Page URLs keep the query and the fragment (`#...`), without
+  these names and without tokens, passwords, emails, SteamIDs and other values
+  that look secret; `page.hash` is the kept fragment. A referrer is an origin.
+  A campaign parameter named here (see [Ad and campaign attribution](#ad-and-campaign-attribution))
+  is not read either, for example `['ref']` or `['gclid']`. The project setting
+  "Remove these query parameters" applies on the server too.
 - The SDK tracks every host, **including `localhost`**. Manalens accepts
   `localhost` events only when the project domain allows them. Dev and live
   data go to the same project, so you can watch your own events in Activity
@@ -746,8 +747,9 @@ framework with its own page-load event (Astro `astro:page-load`), you can set
 `page()` on each event, including the first. `destroy()` clears pending
 events and listeners.
 
-The SDK sends only URL origin and path; query strings and fragments are
-omitted, while selected campaign fields are sanitized.
+Page URLs keep the query and the fragment without the parameters that can
+hold a secret (built-in names, `excludeQueryParams`, and a value check);
+campaign parameters are sent as sanitized campaign fields, not in the URL.
 
 This repository is derived from the MIT-licensed Formo Web SDK. It does not
 include wallet or chain code. The anonymous ID, storage fallback and cookie
@@ -796,9 +798,9 @@ refuses the event.
 A coherent campaign is carried **in memory** across SPA routes and subsequent
 track/identify calls, replaced when a new tagged acquisition arrives, and
 cleared at UTC midnight. Reloading or creating another instance clears it; the
-campaign itself is not written to browser storage. Page URLs omit
-query/fragment, and only bounded, sanitized allowlisted campaign parameters are
-sent.
+campaign itself is not written to browser storage. Page URLs keep
+the query and fragment without secrets; campaign parameters are sent as
+bounded, sanitized campaign fields.
 
 Conversion-credit models run in Analytics' Tinybird backend, not in the SDK.
 The persistent `anonymous_id` lets anonymous journeys join across days, and

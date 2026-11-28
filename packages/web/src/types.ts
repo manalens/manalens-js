@@ -19,7 +19,8 @@ export interface AnalyticsEvent {
   original_timestamp: string;
   context: Partial<Record<(typeof acquisitionKeys)[number], string>> & {
     /** Web events only (channel `web`). */
-    page?: { path: string; title: string; url: string };
+    /** `url` keeps the query and the fragment without secrets; `hash` is the kept fragment with `#`. */
+    page?: { path: string; title: string; url: string; hash?: string };
     /** Web events only (channel `web`). */
     referrer?: string;
     utm_source?: string;

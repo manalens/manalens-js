@@ -1,13 +1,15 @@
 // Adapted from getformo/sdk's EventFactory and traffic-source sanitizer.
 import type { AnalyticsEvent } from './types';
 import { attributionContext } from './attribution-contract';
+import { pageUrlParts } from './url-privacy';
 
 export function pageContext(pageUrl = location.href, excludedParams: readonly string[] = []): AnalyticsEvent['context'] {
   const url = new URL(pageUrl);
   const path = url.pathname !== '/' ? url.pathname.replace(/\/+$/, '') : '/';
-  // Only explicitly selected campaign parameters leave the browser. Full query
-  // strings and fragments often contain emails, tokens, and other private data.
-  // tracking.excludeQueryParams removes parameters from that allowlist too.
+  // Campaign parameters are campaign fields. The page URL keeps the other
+  // query parameters and the fragment, without the names and values that can
+  // hold a secret (url-privacy.ts) and without tracking.excludeQueryParams.
+  // The collector applies the same rules again, with the project's list.
   const campaign = attributionContext({}, url, excludedParams);
   let referrer = '';
   if (document.referrer) {
@@ -20,7 +22,7 @@ export function pageContext(pageUrl = location.href, excludedParams: readonly st
     } catch { /* Ignore malformed referrers. */ }
   }
   return {
-    page: { path, title: document.title.slice(0, 300), url: `${url.origin}${path}` },
+    page: { path, title: document.title.slice(0, 300), ...pageUrlParts(url, path, excludedParams) },
     referrer,
     ...campaign,
     locale: navigator.language?.slice(0, 32),

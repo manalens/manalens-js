@@ -88,7 +88,10 @@ test('ESM SDK sends page and custom events with first-party identity to a local 
     const events = received[0].body.events;
     assert.deepEqual(events.map(event => event.type), ['page', 'track']);
     assert.equal(events[0].context.page.path, '/pricing');
-    assert.equal(events[0].context.page.url, 'https://example.com/pricing');
+    // The email and the campaign parameter are not in the URL; the plain fragment passes the value check.
+    assert.equal(events[0].context.page.url, 'https://example.com/pricing#secret');
+    assert.equal(events[0].context.page.hash, '#secret');
+    assert.ok(!JSON.stringify(events).includes('private'));
     assert.equal(events[0].context.referrer, 'https://google.com');
     assert.equal(events[0].context.utm_source, 'Newsletter');
     assert.equal(events[0].context.library_name, 'Manalens Web SDK');
@@ -268,6 +271,23 @@ test('destroy removes navigation and lifecycle listeners and discards pending ev
   sdk.destroy(); globalThis.location = new URL('https://example.com/other'); window.dispatchEvent(new Event('popstate')); window.dispatchEvent(new Event('pagehide')); sdk.track('after_destroy'); await sdk.flush(); assert.equal(sent.length, 0);
 });
 
+test('page URLs keep the query and the fragment without secrets, campaign parameters and excludeQueryParams', async t => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U';
+  browser(`https://example.com/buy/?mp=KELP422&from=title&token=abc&Session_ID=cs_live_x&x=${jwt}&u=76561198000000000&gclid=g1&lang=de#l=Dear%20Mira&owns=c2FpbG9yLTEyMzQ1Njc4.QmFzZTY0VXJsU2lnbmF0dXJlXzEyMzQ1Ng&tab=crew`);
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example/', autoPageviews: false, flushIntervalMs: 60000, tracking: { excludeQueryParams: ['MP', 'l'] } });
+  try {
+    await sdk.page();
+    await sdk.flush();
+    const { page, gclid } = sent[0].events[0].context;
+    assert.deepEqual(page, { path: '/buy', title: page.title, url: 'https://example.com/buy?from=title&lang=de#tab=crew', hash: '#tab=crew' });
+    assert.equal(gclid, 'g1', 'a click ID stays a campaign field');
+    const text = JSON.stringify(sent);
+    for (const leaked of ['KELP422', 'Mira', 'token=', 'cs_live_x', jwt, '76561198000000000', 'owns=']) assert.ok(!text.includes(leaked), leaked);
+  } finally { sdk.destroy(); }
+});
+
 test('a failed identify is retried with the same message and requests omit credentials', async t => {
   browser(); const sent = []; let fail = true;
   t.mock.method(globalThis, 'fetch', async (url, init) => { sent.push({ url, init, body: JSON.parse(init.body) }); if (fail) { fail = false; return { ok: false, status: 503 }; } return { ok: true }; });
@@ -277,7 +297,7 @@ test('a failed identify is retried with the same message and requests omit crede
     await sdk.flush();
     assert.equal(sent.length, 2); assert.equal(sent[0].url, 'https://collector.example/v0/events'); assert.equal(sent[0].init.credentials, 'omit');
     assert.equal(sent[0].body.events[0].message_id, sent[1].body.events[0].message_id);
-    assert.equal(sent[1].body.events[0].context.page.url, 'https://example.com/pricing');
+    assert.equal(sent[1].body.events[0].context.page.url, 'https://example.com/pricing#secret');
   } finally { sdk.destroy(); }
 });
 

@@ -21,11 +21,13 @@ export interface TrackingOptions {
    */
   excludeTimezones?: string[];
   /**
-   * Query parameter names the SDK never reads, case-insensitive. The SDK
-   * sends no full query string: page URLs are origin and path only, and a
-   * referrer is an origin. It reads only the campaign parameters (UTM fields,
-   * click IDs, `gad_source`, `ref`, `referral`, `referral_code`). Name one of
-   * them here to keep it out of every event, for example `['ref']`.
+   * Query parameter names the SDK never sends, case-insensitive: they are
+   * removed from the page URL (the query and `key=value` pairs in the
+   * fragment), and a campaign parameter named here is not read either, for
+   * example `['ref', 'lobby']`. Tokens, passwords, emails, SteamIDs and other
+   * values that look secret are always removed. A referrer is an origin.
+   * The project setting "Remove these query parameters" applies on the
+   * server too.
    */
   excludeQueryParams?: string[];
 }
