@@ -1,5 +1,5 @@
 // Crash at the next load (P-2835), as in the game SDKs (sdks/SPEC.md "Crash":
-// app_crash at the next launch, only when the last saved session was open and
+// game_crash at the next launch, only when the last saved session was open and
 // focused). A browser gives no event when a tab crashes (for example out of
 // memory), but it gives `pagehide` on a normal close, reload or navigation.
 // So each tab of the game keeps a "session open" entry in localStorage while
@@ -23,7 +23,7 @@ const MAX_TABS = 10;
 export interface TabEntry {
   /** The game session of the tab. */
   session_id: string;
-  /** The identity of the session: app_crash is sent only for this anonymous ID, with this user ID. */
+  /** The identity of the session: game_crash is sent only for this anonymous ID, with this user ID. */
   anonymous_id: string;
   user_id?: string;
   /** The last write (ms since the epoch). */
@@ -32,7 +32,7 @@ export interface TabEntry {
   focused: boolean;
   build?: string;
   app_version?: string;
-  /** The message_id of the last `app_hang` error of this session (P-2833). */
+  /** The message_id of the last `game_hang` error of this session (P-2833). */
   hang_message_id?: string;
 }
 

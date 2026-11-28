@@ -2029,13 +2029,13 @@ test('game mode: reset() ends the session with the old identity; the next event 
   } finally { sdk.destroy(); }
 });
 
-// P-2835: app_crash at the next load and breadcrumbs, as in the game SDKs.
+// P-2835: game_crash at the next load and breadcrumbs, as in the game SDKs.
 const gameStateKey = local => [...local.stored.keys()].find(name => name.endsWith('_game-state'));
 const gameState = local => { const key = gameStateKey(local); return key ? JSON.parse(local.stored.get(key)) : {}; };
 /** A tab that crashes: its storage stays as it was, with no pagehide. */
 const crash = (sdk, local) => { const snapshot = new Map(local.stored); sdk.destroy(); local.stored.clear(); for (const [key, value] of snapshot) local.stored.set(key, value); };
 
-test('game mode: a tab that crashed with focus sends app_crash at the next load; a normal close does not (P-2835)', async t => {
+test('game mode: a tab that crashed with focus sends game_crash at the next load; a normal close does not (P-2835)', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
   const local = memoryStorage();
   const { document } = browser('https://game.example/', { local });
@@ -2055,16 +2055,16 @@ test('game mode: a tab that crashed with focus sends app_crash at the next load;
   try {
     await second.flush();
     const events = eventsOf(sent);
-    assert.deepEqual(tracked(events), ['app_crash', 'session_start', 'game_open']);
-    const [appCrash, start] = events;
-    assert.deepEqual(appCrash.properties, { previous_session_id: open.session_id, previous_build: '571', previous_app_version: '1.4.0' });
-    assert.equal(appCrash.session_id, open.session_id, 'sent in the session that crashed');
-    assert.equal(appCrash.anonymous_id, open.anonymous_id);
-    assert.equal(appCrash.user_id, undefined, 'the user ID of that session (none)');
-    assert.equal(appCrash.original_timestamp, '2026-01-01T10:00:00.000Z', 'at the last saved time');
+    assert.deepEqual(tracked(events), ['game_crash', 'session_start', 'game_open']);
+    const [gameCrash, start] = events;
+    assert.deepEqual(gameCrash.properties, { previous_session_id: open.session_id, previous_build: '571', previous_app_version: '1.4.0' });
+    assert.equal(gameCrash.session_id, open.session_id, 'sent in the session that crashed');
+    assert.equal(gameCrash.anonymous_id, open.anonymous_id);
+    assert.equal(gameCrash.user_id, undefined, 'the user ID of that session (none)');
+    assert.equal(gameCrash.original_timestamp, '2026-01-01T10:00:00.000Z', 'at the last saved time');
     assert.notEqual(start.session_id, open.session_id);
     assert.deepEqual(Object.values(gameState(local)).map(entry => entry.session_id), [start.session_id], 'the old entry is gone');
-    // A normal close (pagehide) removes the entry: the next load sends no app_crash.
+    // A normal close (pagehide) removes the entry: the next load sends no game_crash.
     globalThis.window.dispatchEvent(new Event('pagehide'));
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(gameStateKey(local), undefined);
@@ -2075,7 +2075,7 @@ test('game mode: a tab that crashed with focus sends app_crash at the next load;
   try { await third.flush(); assert.deepEqual(tracked(eventsOf(sent)), ['session_start', 'game_open']); } finally { third.destroy(); }
 });
 
-test('game mode: no app_crash after shutdown() or destroy(), or when the tab was hidden or had no focus', async t => {
+test('game mode: no game_crash after shutdown() or destroy(), or when the tab was hidden or had no focus', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
   const cases = [
     ['hidden', document => { document.visibilityState = 'hidden'; }, sdk => sdk],
@@ -2097,7 +2097,7 @@ test('game mode: no app_crash after shutdown() or destroy(), or when the tab was
     sent.length = 0;
     document.visibilityState = 'visible'; document.hasFocus = () => true;
     const next = new Analytics(gameOptions({ persistQueue: false }));
-    try { await next.flush(); assert.equal(named(eventsOf(sent), 'app_crash').length, 0, name); } finally { next.destroy(); }
+    try { await next.flush(); assert.equal(named(eventsOf(sent), 'game_crash').length, 0, name); } finally { next.destroy(); }
   }
   // destroy() is a stop by the game too.
   const local = memoryStorage();
@@ -2109,7 +2109,7 @@ test('game mode: no app_crash after shutdown() or destroy(), or when the tab was
   assert.equal(gameStateKey(local), undefined);
 });
 
-test('game mode: a focused entry newer than 20 s can be an open tab: app_crash only when it is not written again', async t => {
+test('game mode: a focused entry newer than 20 s can be an open tab: game_crash only when it is not written again', async t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout', 'setInterval'], now: new Date('2026-01-01T10:00:00Z').getTime() });
   const local = memoryStorage();
   const { document } = browser('https://game.example/', { local });
@@ -2123,10 +2123,10 @@ test('game mode: a focused entry newer than 20 s can be an open tab: app_crash o
   crash(crashed, local);
   const reloaded = new Analytics(gameOptions({ persistQueue: false }));
   try {
-    assert.equal(named(reloaded.pending, 'app_crash').length, 0, 'not yet: the tab could still be open');
+    assert.equal(named(reloaded.pending, 'game_crash').length, 0, 'not yet: the tab could still be open');
     t.mock.timers.tick(20_000);
-    const [appCrash] = named(reloaded.pending, 'app_crash');
-    assert.equal(appCrash?.properties.previous_session_id, crashedSession);
+    const [gameCrash] = named(reloaded.pending, 'game_crash');
+    assert.equal(gameCrash?.properties.previous_session_id, crashedSession);
   } finally { reloaded.destroy(); }
 
   // reset() before the second look: the old session's crash is not linked to the new identity.
@@ -2138,10 +2138,10 @@ test('game mode: a focused entry newer than 20 s can be an open tab: app_crash o
   try {
     afterReset.reset();
     t.mock.timers.tick(25_000);
-    assert.equal(named(afterReset.pending, 'app_crash').length, 0, 'no app_crash after reset()');
+    assert.equal(named(afterReset.pending, 'game_crash').length, 0, 'no game_crash after reset()');
   } finally { afterReset.destroy(); }
 
-  // An entry of another anonymous ID (the identity changed since): dropped, no app_crash.
+  // An entry of another anonymous ID (the identity changed since): dropped, no game_crash.
   local.stored.clear();
   const otherIdentity = new Analytics(gameOptions({ persistQueue: false }));
   await otherIdentity.identify('player_old');
@@ -2155,18 +2155,18 @@ test('game mode: a focused entry newer than 20 s can be an open tab: app_crash o
   local.stored.set(savedKey, saved.replace(entry.anonymous_id, '00000000-0000-4000-8000-000000000000'));
   const newIdentity = new Analytics(gameOptions({ persistQueue: false }));
   try {
-    assert.equal(named(newIdentity.pending, 'app_crash').length, 0, 'not sent for another anonymous ID');
+    assert.equal(named(newIdentity.pending, 'game_crash').length, 0, 'not sent for another anonymous ID');
     assert.equal(gameStateKey(local) && Object.values(gameState(local)).some(item => item.session_id === entry.session_id), false, 'the entry is removed');
   } finally { newIdentity.destroy(); }
 
-  // A second tab opens in the background while the first one is open and focused: no app_crash.
+  // A second tab opens in the background while the first one is open and focused: no game_crash.
   local.stored.clear();
   const playing = new Analytics(gameOptions({ persistQueue: false }));
   t.mock.timers.tick(2000);
   const background = new Analytics(gameOptions({ persistQueue: false }));
   try {
     for (let i = 0; i < 12; i++) t.mock.timers.tick(5000);
-    assert.equal(named(background.pending, 'app_crash').length, 0);
+    assert.equal(named(background.pending, 'game_crash').length, 0);
     assert.equal(Object.keys(gameState(local)).length, 2, 'one entry per tab');
   } finally { playing.destroy(); background.destroy(); }
 });
@@ -2277,9 +2277,9 @@ function hangPage(t, url = 'https://game.example/') {
   const show = state => { page.document.visibilityState = state; page.document.dispatchEvent(new Event('visibilitychange')); };
   return { ...page, clock, block, run, show };
 }
-const hangs = events => named(events, 'error').filter(event => event.properties.error_type === 'app_hang');
+const hangs = events => named(events, 'error').filter(event => event.properties.error_type === 'game_hang');
 
-test('hang detection: a main thread blocked for 5 s or more sends an app_hang error when it runs again (P-2833)', async t => {
+test('hang detection: a main thread blocked for 5 s or more sends an game_hang error when it runs again (P-2833)', async t => {
   const { block, run } = hangPage(t);
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const sdk = new Analytics(gameOptions({ persistQueue: false }));
@@ -2293,8 +2293,8 @@ test('hang detection: a main thread blocked for 5 s or more sends an app_hang er
     assert.equal(more.length, 0, 'the 3 s block is under the limit');
     assert.deepEqual(hang.properties, {
       severity: 'error', message: 'The main thread was blocked for 6.0 s', handled: false, source: 'auto',
-      fingerprint: errorFingerprint('app_hang', 'The main thread was blocked for 9.9 s', '', ''), error_type: 'app_hang',
-      breadcrumbs: 'session_start,game_open,level_start', hang_duration_ms: 6000,
+      fingerprint: errorFingerprint('game_hang', 'The main thread was blocked for 9.9 s', '', ''), error_type: 'game_hang',
+      breadcrumbs: 'session_start,game_open,level_start', hang_duration_s: 6,
     });
     assert.equal(hang.original_timestamp, new Date(Date.now()).toISOString(), 'sent when the thread runs again');
   } finally { sdk.destroy(); }
@@ -2337,11 +2337,11 @@ test('hang detection: hangThresholdMs changes the limit, 0 turns it off; website
     run(1000); block(1800);
     run(1000); block(2500);
     await low.flush();
-    assert.deepEqual(hangs(eventsOf(sent)).map(event => event.properties.hang_duration_ms), [2500]);
+    assert.deepEqual(hangs(eventsOf(sent)).map(event => event.properties.hang_duration_s), [2.5]);
   } finally { low.destroy(); }
 });
 
-test('hang detection: an app_crash after a hang has its message_id in hang_message_id', async t => {
+test('hang detection: an game_crash after a hang has its message_id in hang_message_id', async t => {
   const { block, run, local } = hangPage(t);
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const first = new Analytics(gameOptions({ persistQueue: false }));
@@ -2356,9 +2356,9 @@ test('hang detection: an app_crash after a hang has its message_id in hang_messa
   const next = new Analytics(gameOptions({ persistQueue: false }));
   try {
     await next.flush();
-    const [appCrash] = named(eventsOf(sent), 'app_crash');
-    assert.equal(appCrash.properties.hang_message_id, hang.message_id);
-    assert.equal(appCrash.properties.previous_session_id, hang.session_id);
+    const [gameCrash] = named(eventsOf(sent), 'game_crash');
+    assert.equal(gameCrash.properties.hang_message_id, hang.message_id);
+    assert.equal(gameCrash.properties.previous_session_id, hang.session_id);
     // The new session has no hang: a crash of it would carry none.
     assert.equal(Object.values(gameState(local))[0].hang_message_id, undefined);
   } finally { next.destroy(); }
@@ -2391,10 +2391,10 @@ test('hang detection: with long-animation-frame entries, the script that ran lon
     await sdk.flush();
     const [hang, ...more] = hangs(eventsOf(sent));
     assert.equal(more.length, 0);
-    assert.equal(hang.properties.hang_duration_ms, 7000);
+    assert.equal(hang.properties.hang_duration_s, 7);
     assert.equal(hang.properties.file, '/assets/game.js');
     assert.equal(hang.properties.function, 'updatePhysics');
-    assert.equal(hang.properties.fingerprint, errorFingerprint('app_hang', '', '/assets/game.js', 'updatePhysics'));
+    assert.equal(hang.properties.fingerprint, errorFingerprint('game_hang', '', '/assets/game.js', 'updatePhysics'));
     assert.equal(hang.properties.stack, 'at updatePhysics (/assets/game.js)\n    at https://game.example/x.js (/x.js)');
     assert.ok(!JSON.stringify(hang).includes('token'));
   } finally { sdk.destroy(); globalThis.PerformanceObserver = original; }

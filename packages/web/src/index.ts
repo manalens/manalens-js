@@ -168,7 +168,7 @@ export class Analytics {
   private restoring?: Promise<void>;
   /** game_open was sent for this page load (and this identity). */
   private gameOpened = false;
-  /** The game session of the last event: its ID, start and last activity (ms), and the message_id of its last app_hang. */
+  /** The game session of the last event: its ID, start and last activity (ms), and the message_id of its last game_hang. */
   private gameSession?: { id: string; startedAt: number; lastAt: number; hangMessageId?: string };
   /** Game mode: the main-thread watchdog (P-2833); undefined when hangThresholdMs is 0. */
   private readonly hangWatchdog?: HangWatchdog;
@@ -826,7 +826,7 @@ export class Analytics {
   }
 
   /**
-   * At the start: `app_crash` for each tab whose game session was open and
+   * At the start: `game_crash` for each tab whose game session was open and
    * focused and that did not close cleanly. A focused entry that is newer
    * than CRASH_ALIVE_MS can be a tab that is still open: look again then.
    */
@@ -844,18 +844,18 @@ export class Analytics {
     }, CRASH_ALIVE_MS);
   }
 
-  /** `app_crash` in the session that crashed, at its last saved time, as the game SDKs send it. */
+  /** `game_crash` in the session that crashed, at its last saved time, as the game SDKs send it. */
   private sendCrash(entry: TabEntry): void {
     // Only for the identity of that session: after reset() or a new identity, the old crash is dropped.
-    if (entry.anonymous_id !== generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies)) { this.logger.log('debug', 'app_crash of another identity dropped'); return; }
+    if (entry.anonymous_id !== generateAnonymousId(this.keys.anonymousId, this.options.crossSubdomainCookies)) { this.logger.log('debug', 'game_crash of another identity dropped'); return; }
     const properties: AnalyticsEvent['properties'] = { previous_session_id: entry.session_id };
     if (entry.build) properties.previous_build = entry.build;
     if (entry.app_version) properties.previous_app_version = entry.app_version;
     // The crash links to the last hang of that session.
     if (entry.hang_message_id) properties.hang_message_id = entry.hang_message_id;
     const ids = { anonymous_id: entry.anonymous_id, session_id: entry.session_id, ...(entry.user_id ? { user_id: entry.user_id } : {}) };
-    this.logger.log('info', 'The last game session did not end cleanly: app_crash');
-    this.push(this.build('track', 'app_crash', properties, new Date(entry.at).toISOString(), ids));
+    this.logger.log('info', 'The last game session did not end cleanly: game_crash');
+    this.push(this.build('track', 'game_crash', properties, new Date(entry.at).toISOString(), ids));
   }
 
   private persistAllowed(): boolean {
@@ -915,24 +915,25 @@ export class Analytics {
 
   /**
    * The main thread was blocked for at least hangThresholdMs (P-2833): an
-   * `error` with `error_type` `app_hang`, the same limits as other captured
+   * `error` with `error_type` `game_hang`, the same limits as other captured
    * errors. Its message_id goes into the saved session state, so an
-   * `app_crash` of this session at the next load has it in `hang_message_id`.
+   * `game_crash` of this session at the next load has it in `hang_message_id`.
    */
   private recordHang(hang: Hang): void {
     if (!this.game || !this.active() || this.closing) return;
-    const durationMs = Math.round(hang.durationMs);
+    // Seconds with one decimal, as in the game SDKs (6.2).
+    const durationS = Math.round(hang.durationMs / 100) / 10;
     const place = hangPlace(hang.scripts, cleanFile, cleanMessage);
     const event = this.recordError({
-      message: `The main thread was blocked for ${(durationMs / 1000).toFixed(1)} s`,
+      message: `The main thread was blocked for ${durationS.toFixed(1)} s`,
       severity: 'error',
-      errorType: 'app_hang',
+      errorType: 'game_hang',
       handled: false,
       source: 'auto',
       file: place.file,
       fn: place.fn,
       stack: place.stack,
-      properties: { hang_duration_ms: durationMs },
+      properties: { hang_duration_s: durationS },
     });
     if (!event || !this.gameSession || event.session_id !== this.gameSession.id) return;
     this.gameSession.hangMessageId = event.message_id;

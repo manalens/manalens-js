@@ -70,7 +70,7 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
 | `first-open` | localStorage, else memory | Until `optOut()` or `setConsent(false)` | Game mode only: the time of the first `game_open` |
-| `game-state` | localStorage | While a game session is open; removed on `pagehide`, `shutdown()`, `destroy()`, `reset()`, `optOut()` and `setConsent(false)` | Game mode only: one entry per open tab (session ID, last write time, focus, build, version), for `app_crash` |
+| `game-state` | localStorage | While a game session is open; removed on `pagehide`, `shutdown()`, `destroy()`, `reset()`, `optOut()` and `setConsent(false)` | Game mode only: one entry per open tab (session ID, last write time, focus, build, version), for `game_crash` |
 | `queue` | IndexedDB, else localStorage | Until the collector accepts the events; at most 1000 events and 7 days | `persistQueue` only: unsent events |
 
 Like Formo, cookies are scoped to the apex domain (`.example.com`) by default
@@ -123,7 +123,7 @@ analytics.track('signup_completed', { plan: 'starter' });
 | `app` | none | App context for a browser or Electron game; see [Browser and Electron games](#browser-and-electron-games) |
 | `game` | `false` | Game mode: `game_open`, `session_start` / `session_end` and captured errors. Needs `app`. See [Game mode](#game-mode). Snippet: `data-game="true"` |
 | `persistQueue` | `true` in game mode, else `false` | Keep unsent events in IndexedDB (else localStorage) for the next load. Needs `app`. See [Persistent queue](#persistent-queue). Snippet: `data-persist-queue` |
-| `hangThresholdMs` | `5000` | Game mode: a main thread blocked this many milliseconds is a hang (`app_hang`). `0` turns hang detection off; other values are kept between 1000 and 60000. See [Hangs](#hangs). Snippet: `data-hang-threshold-ms` |
+| `hangThresholdMs` | `5000` | Game mode: a main thread blocked this many milliseconds is a hang (`game_hang`). `0` turns hang detection off; other values are kept between 1000 and 60000. See [Hangs](#hangs). Snippet: `data-hang-threshold-ms` |
 
 **Delivery.** Events wait in memory and are sent in batches. They go to
 browser storage only with the `persistQueue` option (a game with `app`; see
@@ -463,7 +463,7 @@ Snippet: `data-app-platform` (required for the others to apply),
 `data-app-storefront`, `data-app-version`, `data-app-build`, `data-app-engine`.
 
 With `game: true` the SDK sends `game_open`, `session_start`, `session_end`,
-`error` and `app_crash` for you; see [Game mode](#game-mode). For the other
+`error` and `game_crash` for you; see [Game mode](#game-mode). For the other
 standard game events (`game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
 
@@ -489,7 +489,7 @@ them:
 | `game_open` | `is_first_open`, `first_open_at` (ISO 8601) | Each start (page load) |
 | `session_end` | `duration_s`, and `errors_dropped` when errors were dropped | `pagehide`; `shutdown()`; `reset()`; or, after 30 minutes without events or at 24 hours, with the next event (it then has the time of the last activity) |
 | `error` | `severity`, `message`, `error_type`, `handled`, `source`, `fingerprint`, and `file`, `line`, `function`, `stack`, `breadcrumbs` when known | A window `error` or `unhandledrejection` (`source: "auto"`, `handled: false`), or `trackError()` (`source: "manual"`) |
-| `app_crash` | `previous_session_id`, and `previous_build`, `previous_app_version` when the `app` option has them, and `hang_message_id` when the session had an `app_hang` | At the next load, when a tab of the game closed without `pagehide` (for example a tab that ran out of memory) while it was visible and had focus. It is sent in the session that crashed, with the time of its last saved state |
+| `game_crash` | `previous_session_id`, and `previous_build`, `previous_app_version` when the `app` option has them, and `hang_message_id` when the session had a `game_hang` | At the next load, when a tab of the game closed without `pagehide` (for example a tab that ran out of memory) while it was visible and had focus. It is sent in the session that crashed, with the time of its last saved state |
 
 - **Sessions** use the web session rules above (30 minutes idle, 24 hours at
   most), with no second clock. Each start is a new session. While the page is
@@ -508,12 +508,12 @@ them:
   `focus`, `blur` and visibility changes. `pagehide` (a close, a reload or a
   navigation), `shutdown()`, `destroy()` and `reset()` remove it, so a normal
   close is never a crash. An entry that is still there at the next load, of a
-  tab that was visible and had focus, gives `app_crash`, as the game SDKs do
+  tab that was visible and had focus, gives `game_crash`, as the game SDKs do
   ("only when the last saved session was open and focused"). A tab that the
   browser closed in the background is not a crash. Several tabs of the same
   game each have their own entry: an entry written in the last 20 seconds can
   be a tab that is still open, so the SDK looks at it again 20 seconds later
-  and sends `app_crash` only when it was not written since. `app_crash` goes
+  and sends `game_crash` only when it was not written since. `game_crash` goes
   with the anonymous ID and user ID of the session that crashed, and only when
   that anonymous ID is still the current one: after `reset()` or a new
   identity, the old crash is dropped. In consent mode, nothing is saved before
@@ -585,9 +585,9 @@ Options: `severity` (`debug`, `info`, `warning`, `error` (default),
 
 In game mode the SDK watches the main thread. When it was blocked for at
 least `hangThresholdMs` (default 5000 ms), the SDK sends an `error` when the
-thread runs again: `error_type` `app_hang`, `severity` `error`, `handled`
+thread runs again: `error_type` `game_hang`, `severity` `error`, `handled`
 `false`, `source` `auto`, the message `The main thread was blocked for 6.2 s`,
-and `hang_duration_ms`. The error limits of other captured errors apply.
+and `hang_duration_s` (seconds, one decimal, for example `6.2`). The error limits of other captured errors apply.
 
 - Where the browser has `long-animation-frame` entries (Chromium), the script
   that ran longest gives `file` and `function`, and `stack` lists the scripts
@@ -599,9 +599,9 @@ and `hang_duration_ms`. The error limits of other captured errors apply.
   visible. A gap of more than 10 minutes, or one where the wall clock and the
   monotonic clock do not agree, is a sleep of the computer, not a hang.
 - A hang that never ends cannot be reported: a blocked page runs no code. If
-  the tab then crashes, the next load sends `app_crash` without
+  the tab then crashes, the next load sends `game_crash` without
   `hang_message_id`. If the game crashes after a hang that ended, the
-  `app_crash` has the `message_id` of that `app_hang` error in
+  `game_crash` has the `message_id` of that `game_hang` error in
   `hang_message_id`.
 
 ### Persistent queue
