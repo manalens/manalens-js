@@ -1,6 +1,6 @@
 {
   "name": "@manalens/web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Manalens Web SDK: first-party web analytics and attribution. Track page views, custom events, identified users, UTM parameters and ad click IDs in your website or web app.",
   "keywords": [
     "web-analytics",
