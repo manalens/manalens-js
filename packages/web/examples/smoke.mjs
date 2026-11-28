@@ -288,6 +288,21 @@ test('page URLs keep the query and the fragment without secrets, campaign parame
   } finally { sdk.destroy(); }
 });
 
+test('page URLs: nested URLs and encoded pairs in a value are removed, `;` separates, fragment path IDs become :id', async t => {
+  browser('https://example.com/play?next=https%3A%2F%2Fx%2F%3Ftoken%3Dabc&r=a%3Db%26code%3D123&from=title;token=abc;lang=de#/letters/abc123def456/read');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example/', autoPageviews: false, flushIntervalMs: 60000 });
+  try {
+    await sdk.page();
+    await sdk.flush();
+    const { page } = sent[0].events[0].context;
+    assert.equal(page.url, 'https://example.com/play?from=title&lang=de#/letters/:id/read');
+    assert.equal(page.hash, '#/letters/:id/read');
+    for (const leaked of ['abc123def456', 'code', 'token', 'x%2F']) assert.ok(!JSON.stringify(sent).includes(leaked), leaked);
+  } finally { sdk.destroy(); }
+});
+
 test('a failed identify is retried with the same message and requests omit credentials', async t => {
   browser(); const sent = []; let fail = true;
   t.mock.method(globalThis, 'fetch', async (url, init) => { sent.push({ url, init, body: JSON.parse(init.body) }); if (fail) { fail = false; return { ok: false, status: 503 }; } return { ok: true }; });
