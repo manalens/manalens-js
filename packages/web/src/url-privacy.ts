@@ -11,10 +11,50 @@ export const builtInExcludedQueryParams = [
   'session', 'session_id', 'sessionid', 'sid', 'jwt', 'signature', 'sig', 'hmac', 'otp', 'ticket', 'owns', 'email',
   'oauth_token', 'oauth_verifier', 'privy_oauth_code', 'privy_oauth_state', 'privy_oauth_provider', 'mana_hid',
 ] as const;
-const builtIn = new Set<string>(builtInExcludedQueryParams);
 const excludedNamePattern = /token|secret|passw|signature|api[_-]?key|^openid\./i;
 /** Campaign parameters are sent as campaign fields, not in the URL. */
 const campaignParams = new Set<string>([...campaignKeys, ...clickNetworks.map(([key]) => key), 'gad_source', 'ref', 'referral', 'referral_code'].map(name => name.toLowerCase()));
+
+const builtIn = new Set<string>(builtInExcludedQueryParams);
+/**
+ * Credential words that also count inside a longer name, on word boundaries
+ * (`access-token`, `x_code`, `authToken`, `user.email`). `state`, `pass` and
+ * `key` count only as the whole name, as they are common words in game URLs.
+ */
+const boundaryWords = new Set(['token', 'code', 'secret', 'password', 'passwd', 'pwd', 'auth', 'jwt', 'otp', 'signature', 'sig', 'session', 'sid', 'nonce', 'ticket', 'owns', 'email', 'credential', 'credentials', 'hmac', 'apikey', 'oauth']);
+
+/**
+ * A parameter name as the rules compare it: decoded until it stops changing
+ * (at most 4 times), without leading `?`, `#`, `!` or `/`, without a trailing
+ * `[]` or `[n]`, trimmed and in lower case. `%253Fcode%5B%5D` is `code`.
+ */
+export function normalizeParamName(raw: string): string {
+  let name = raw;
+  for (let step = 0; step < 4; step++) {
+    let next = name;
+    try { next = decodeURIComponent(name.replace(/\+/g, ' ')); } catch { break; }
+    if (next === name) break;
+    name = next;
+  }
+  return name.trim().replace(/^[?#!/]+/, '').replace(/\[\d*\]$/, '').trim().toLowerCase();
+}
+
+/** The words of a name: split at camelCase and at every character that is not a letter or a digit. */
+const nameWords = (raw: string): string[] => raw.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * True when a parameter name is removed: by the built-in list (the whole
+ * name, a credential word in it, or excludedNamePattern) or by the project's
+ * list (`extra`, lower case; the whole normalized name only).
+ */
+export function isExcludedParamName(name: string, extra: ReadonlySet<string> = new Set()): boolean {
+  const normalized = normalizeParamName(name);
+  if (builtIn.has(normalized) || excludedNamePattern.test(normalized) || extra.has(normalized)) return true;
+  // Words from the decoded name before lower-casing, so `authToken` splits.
+  let decoded = name;
+  for (let step = 0; step < 4; step++) { try { const next = decodeURIComponent(decoded); if (next === decoded) break; decoded = next; } catch { break; } }
+  return nameWords(decoded).some(word => boundaryWords.has(word));
+}
 
 const secretPrefix = /^(cs_live_|cs_test_|sk_|rk_|whsec_|mana_sk_|mana_api_)/i;
 const dotToken = /^[A-Za-z0-9_-]{4,}(?:\.[A-Za-z0-9_-]{4,}){1,2}$/;
@@ -60,9 +100,10 @@ function cleanPairs(text: string, extra: ReadonlySet<string>): string {
     if (!pair) continue;
     const at = pair.indexOf('=');
     const rawName = at < 0 ? pair : pair.slice(0, at);
-    const name = decode(rawName).trim();
+    // A name with `/` (a route part read as a name, `#/a/b/token=x`) is never a real parameter: removed.
+    const name = normalizeParamName(rawName);
     const value = at < 0 ? '' : pair.slice(at + 1);
-    if (!name || builtIn.has(name.toLowerCase()) || excludedNamePattern.test(name.toLowerCase()) || extra.has(name.toLowerCase()) || campaignParams.has(name.toLowerCase()) || looksLikeSecret(value) || looksLikeSecret(rawName) || holdsUrlStructure(value)) continue;
+    if (!name || name.includes('/') || isExcludedParamName(rawName, extra) || campaignParams.has(name) || looksLikeSecret(value) || looksLikeSecret(rawName) || holdsUrlStructure(value)) continue;
     kept.push(pair);
   }
   return kept.join('&');
@@ -107,9 +148,14 @@ export function cleanFragment(hash: string, extra: ReadonlySet<string>): string 
     if (!fragment.includes('/')) return identifierSegment(fragment) ? '' : fragment;
     return cleanSegments(fragment);
   }
+  // The route and the pairs: `#/play?l=1` (a route, `?`, pairs), `#?l=1` (no route),
+  // `#/a/b/x=1` (the route is up to the last `/` before the first pair).
+  const firstPair = fragment.search(/=(?![=?]|$)/);
   const question = fragment.indexOf('?');
-  const route = question >= 0 && question < fragment.search(/=(?![=?]|$)/) ? fragment.slice(0, question) : '';
-  const pairs = cleanPairs(route ? fragment.slice(question + 1) : fragment, extra);
+  let route = '', rest = fragment;
+  if (question >= 0 && question < firstPair) { route = fragment.slice(0, question); rest = fragment.slice(question + 1); }
+  else if (fragment.startsWith('/')) { const slash = fragment.lastIndexOf('/', firstPair); route = fragment.slice(0, slash); rest = fragment.slice(slash + 1); }
+  const pairs = cleanPairs(rest, extra);
   const keptRoute = route && !looksLikeSecret(route) ? cleanSegments(route) : '';
   return keptRoute && pairs ? `${keptRoute}?${pairs}` : keptRoute || pairs;
 }

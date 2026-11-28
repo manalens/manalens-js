@@ -303,6 +303,19 @@ test('page URLs: nested URLs and encoded pairs in a value are removed, `;` separ
   } finally { sdk.destroy(); }
 });
 
+test('page URLs: name variants and fragment routes miss nothing', async t => {
+  browser('https://example.com/play?%3Fcode=abc&code%5B%5D=1&authToken=x&access-token=y&%2563ode=z&from=title#/a/b/token=SECRET&tab=crew');
+  const sent = [];
+  t.mock.method(globalThis, 'fetch', async (_url, init) => { sent.push(JSON.parse(init.body)); return { ok: true }; });
+  const sdk = new Analytics({ publishableKey: 'mana_pk_key', endpoint: 'https://collector.example/', autoPageviews: false, flushIntervalMs: 60000 });
+  try {
+    await sdk.page();
+    await sdk.flush();
+    assert.equal(sent[0].events[0].context.page.url, 'https://example.com/play?from=title#/a/b?tab=crew');
+    assert.ok(!JSON.stringify(sent).includes('SECRET'));
+  } finally { sdk.destroy(); }
+});
+
 test('page URLs: a base64 token with / in the fragment does not survive', async t => {
   const b64 = 'q8Zf3/xK9+Lm2Pa7Rt/Wy4Bn0Vc6Hd1Js5Qe8Ug2Mi7Ko3Np9Xr4Tz6Ab0Cd2Ef8Gh1Ij5Kl7Mn==';
   browser(`https://example.com/play#${b64}`);
