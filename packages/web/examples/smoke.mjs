@@ -1136,8 +1136,8 @@ test('identify() while opted out is a no-op, and optIn() starts without a user I
 });
 
 const gameId = '22222222-2222-4222-8222-222222222222';
-test('game handoff: mana_hid leaves the address bar and one identity_handoff event joins the game ID', async t => {
-  browser(`https://example.com/wiki?tab=boss&mana_hid=${gameId.toUpperCase()}.1794784346#drops`);
+test('game handoff: mana_handoff leaves the address bar and one identity_handoff event joins the game ID', async t => {
+  browser(`https://example.com/wiki?tab=boss&mana_handoff=${gameId.toUpperCase()}.1794784346#drops`);
   const history = fakeHistory(); globalThis.history = history;
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   const sdk = new Analytics({ publishableKey: 'mana_pk_handoff', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
@@ -1159,7 +1159,7 @@ test('game handoff: mana_hid leaves the address bar and one identity_handoff eve
 });
 
 test('game handoff: waits for consent, and is dropped by setConsent(false), opt-out or a malformed value', async t => {
-  browser(`https://consent.com/?mana_hid=${gameId}.1794784346`);
+  browser(`https://consent.com/?mana_handoff=${gameId}.1794784346`);
   globalThis.history = fakeHistory();
   const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
   let sdk = make({ publishableKey: 'mana_pk_handoff_consent', requireConsent: true });
@@ -1174,20 +1174,20 @@ test('game handoff: waits for consent, and is dropped by setConsent(false), opt-
     sdk.destroy();
 
     sent.length = 0;
-    browser(`https://withdraw.com/?mana_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
+    browser(`https://withdraw.com/?mana_handoff=${gameId}.1794784346`); globalThis.history = fakeHistory();
     sdk = make({ publishableKey: 'mana_pk_handoff_withdraw', requireConsent: true });
     sdk.setConsent(false); sdk.setConsent(true); await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'withdrawn consent drops the handoff');
     sdk.destroy();
 
-    browser(`https://optout.com/?mana_hid=${gameId}.1794784346`); globalThis.history = fakeHistory();
+    browser(`https://optout.com/?mana_handoff=${gameId}.1794784346`); globalThis.history = fakeHistory();
     sdk = make({ publishableKey: 'mana_pk_handoff_optout', requireConsent: true });
     sdk.optOut(); sdk.optIn(); sdk.setConsent(true); await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false, 'opt-out drops the handoff');
     sdk.destroy();
 
     for (const value of ['not-an-id', `${gameId}`, `${gameId}.abc`]) {
-      browser(`https://bad.com/?mana_hid=${encodeURIComponent(value)}&q=1`); globalThis.history = fakeHistory();
+      browser(`https://bad.com/?mana_handoff=${encodeURIComponent(value)}&q=1`); globalThis.history = fakeHistory();
       sdk = make({ publishableKey: 'mana_pk_handoff_bad' });
       await sdk.flush();
       assert.equal(globalThis.location.search, '?q=1', value);
@@ -1205,12 +1205,45 @@ test('game handoff: an own ID is ignored, and the URL is unchanged without the p
   let sdk = make({ publishableKey: 'mana_pk_handoff_self' });
   const own = sdk.getAnonymousId(); sdk.destroy();
   assert.deepEqual(globalThis.history.calls, [], 'no replaceState without the parameter');
-  browser(`https://self.com/?mana_hid=${own}.1794784346`, { jar }); globalThis.history = fakeHistory();
+  browser(`https://self.com/?mana_handoff=${own}.1794784346`, { jar }); globalThis.history = fakeHistory();
   sdk = make({ publishableKey: 'mana_pk_handoff_self' });
   try {
     await sdk.flush();
     assert.equal(eventsOf(sent).some(event => event.event === 'identity_handoff'), false);
   } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('getHandoffUrl: the link keeps the player; the website SDK reads it back (P-2889)', async t => {
+  browser('https://html-classic.itch.zone/html/123/index.html');
+  const game = make({ publishableKey: 'mana_pk_handoff_game' });
+  try {
+    const id = game.getAnonymousId();
+    const before = Math.floor(Date.now() / 1000);
+    const link = new URL(game.getHandoffUrl('https://yourgame.com/buy?ref=demo#top'));
+    const [hid, at] = link.searchParams.get('mana_handoff').split('.');
+    assert.equal(hid, id);
+    assert.ok(Number(at) >= before && Number(at) <= before + 2, 'unix seconds, now');
+    assert.equal(link.searchParams.get('ref'), 'demo', 'other parameters stay');
+    assert.equal(link.hash, '#top', 'the fragment stays');
+    assert.equal(new URL(game.getHandoffUrl(link.toString())).searchParams.getAll('mana_handoff').length, 1, 'a second call replaces the value');
+    assert.equal(new URL(game.getHandoffUrl('/play')).origin, 'https://html-classic.itch.zone', 'a relative URL resolves against the page');
+    assert.equal(game.getHandoffUrl('http://[bad'), 'http://[bad', 'an invalid URL is returned unchanged');
+    // The website SDK reads the parameter, removes it, and joins the game ID.
+    const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+    browser(link.toString()); globalThis.history = fakeHistory();
+    const site = make({ publishableKey: 'mana_pk_handoff_site' });
+    try {
+      await site.flush();
+      const handoff = eventsOf(sent).find(event => event.event === 'identity_handoff');
+      assert.equal(handoff.properties.source_anonymous_id, id);
+      assert.equal(handoff.properties.handoff_at, Number(at));
+      assert.ok(globalThis.history.calls.length > 0 && globalThis.history.calls.every(call => !call[1].includes('mana_handoff')), 'removed from the address bar');
+    } finally { site.destroy(); delete globalThis.history; }
+  } finally { game.destroy(); }
+  // Before consent: no identity, the URL is unchanged.
+  browser('https://html-classic.itch.zone/html/123/index.html');
+  const waiting = make({ publishableKey: 'mana_pk_handoff_consent', requireConsent: true });
+  try { assert.equal(waiting.getHandoffUrl('https://yourgame.com/buy'), 'https://yourgame.com/buy'); } finally { waiting.destroy(); }
 });
 
 // P-2516: optional app context for browser and Electron games.

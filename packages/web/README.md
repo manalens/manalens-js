@@ -406,14 +406,22 @@ and does not touch browser storage.
 
 ## Players who come from your game
 
-A game that uses the Manalens Godot SDK can open your website with `Manalens.link_url(url)`. The link has a `mana_hid` parameter: the game's anonymous ID and the time the game made the link.
+A game can open your website with a link that keeps its player: `get_handoff_url(url)` in Godot, `GetHandoffUrl(url)` in Unity and Unreal, and `getHandoffUrl(url)` in this SDK (a browser game on another domain, for example the itch.io frame). The link has a `mana_handoff` parameter: the game's anonymous ID and the time the game made the link.
 
 When the page loads, the SDK:
 
-1. Removes `mana_hid` from the address bar (`history.replaceState`). Other parameters and the hash stay.
+1. Removes `mana_handoff` from the address bar (`history.replaceState`). Other parameters and the hash stay.
 2. Sends one `track` event `identity_handoff` with `source_anonymous_id` (the game's ID) and `handoff_at` (unix seconds).
 
 Manalens then counts the browser and the game install as one player, without `identify()`. The collector accepts a handoff for 10 minutes only, so a link that a player shares does not join other people. In consent mode the event waits for `setConsent(true)`. `setConsent(false)`, `optOut()` and `reset()` drop it. No setup is needed on the website.
+
+From a browser game:
+
+```js
+button.onclick = () => window.open(manalens.getHandoffUrl('https://yourgame.com/buy'), '_blank');
+```
+
+Call it when the player clicks: the value holds the current time and works for 10 minutes. Before consent it returns the URL unchanged. Redirects on your site must keep the `mana_handoff` parameter.
 
 ## Optional consent mode
 

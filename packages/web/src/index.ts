@@ -162,7 +162,7 @@ export class Analytics {
   private deferredTraits?: Traits;
   /** The protected-traits warning is printed once per instance. */
   private warnedProtectedTraits = false;
-  /** A game handoff (`mana_hid`) read on load, sent once identity is allowed (P-2523). */
+  /** A game handoff (`mana_handoff`) read on load, sent once identity is allowed (P-2523). */
   private handoff?: Handoff;
   private readonly keys: { anonymousId: string; sessionId: string; userId: string; optOut: string; firstOpen: string; gameState: string };
   /** Game mode (P-2800): game_open, sessions and errors. Only with a valid app option. */
@@ -600,6 +600,26 @@ export class Analytics {
    */
   getSessionId(): string | undefined {
     return this.active() && this.identityAllowed() && !this.pageExcluded() ? currentSessionId(this.keys.sessionId, this.options.crossSubdomainCookies) : undefined;
+  }
+
+  /**
+   * A link to your website that keeps this player (P-2889): the URL with
+   * `mana_handoff=<anonymous ID>.<unix seconds>`. The web SDK on that site
+   * joins the two IDs into one player. For a browser game on another domain
+   * (for example the itch.io frame). The value holds the current time and the
+   * collector accepts it for 10 minutes, so call it when the player clicks.
+   * Returns the URL unchanged when the SDK sends no identity (before consent,
+   * after optOut(), on an excluded page) or when it is not a valid URL. A
+   * relative URL is resolved against the current page. The Godot, Unity and
+   * Unreal SDKs have the same function (get_handoff_url, GetHandoffUrl).
+   */
+  getHandoffUrl(url: string): string {
+    const id = this.getAnonymousId();
+    if (!id) return url;
+    let target: URL;
+    try { target = new URL(url, typeof location === 'undefined' ? undefined : location.href); } catch { return url; }
+    target.searchParams.set(HANDOFF_PARAM, `${id}.${Math.floor(Date.now() / 1000)}`);
+    return target.toString();
   }
 
   /**
@@ -1304,13 +1324,13 @@ function retryableStatus(status: number): boolean {
   return status === 408 || status === 429 || (status >= 500 && status <= 599);
 }
 
-/** Game to website identity handoff (P-2523): `?mana_hid=<game anonymous ID>.<unix seconds>`. */
-const HANDOFF_PARAM = 'mana_hid';
+/** Game to website identity handoff (P-2523, renamed in P-2889): `?mana_handoff=<game anonymous ID>.<unix seconds>`. */
+const HANDOFF_PARAM = 'mana_handoff';
 const HANDOFF_EVENT = 'identity_handoff';
 const HANDOFF = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(\d{1,12})$/i;
 type Handoff = { source: string; at: number };
 
-/** Read `mana_hid` and remove it from the address bar (other parameters and the hash stay). */
+/** Read `mana_handoff` and remove it from the address bar (other parameters and the hash stay). */
 function takeHandoff(): Handoff | undefined {
   if (typeof location === 'undefined') return undefined;
   let url: URL;

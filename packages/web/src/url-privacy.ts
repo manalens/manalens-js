@@ -9,7 +9,7 @@ export const builtInExcludedQueryParams = [
   'token', 'access_token', 'refresh_token', 'id_token', 'auth_token', 'code', 'state', 'nonce', 'key', 'api_key', 'apikey',
   'secret', 'client_secret', 'password', 'pass', 'passwd', 'pwd', 'auth', 'authorization', 'credential', 'credentials',
   'session', 'session_id', 'sessionid', 'sid', 'jwt', 'signature', 'sig', 'hmac', 'otp', 'ticket', 'owns', 'email',
-  'oauth_token', 'oauth_verifier', 'privy_oauth_code', 'privy_oauth_state', 'privy_oauth_provider', 'mana_hid',
+  'oauth_token', 'oauth_verifier', 'privy_oauth_code', 'privy_oauth_state', 'privy_oauth_provider', 'mana_handoff',
 ] as const;
 const excludedNamePattern = /token|secret|passw|signature|api[_-]?key|^openid\./i;
 /** Campaign parameters are sent as campaign fields, not in the URL. */
