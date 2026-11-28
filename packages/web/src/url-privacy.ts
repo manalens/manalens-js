@@ -59,9 +59,10 @@ function cleanPairs(text: string, extra: ReadonlySet<string>): string {
   for (const pair of text.split(/[&;]/)) {
     if (!pair) continue;
     const at = pair.indexOf('=');
-    const name = decode(at < 0 ? pair : pair.slice(0, at)).trim();
+    const rawName = at < 0 ? pair : pair.slice(0, at);
+    const name = decode(rawName).trim();
     const value = at < 0 ? '' : pair.slice(at + 1);
-    if (!name || builtIn.has(name.toLowerCase()) || excludedNamePattern.test(name.toLowerCase()) || extra.has(name.toLowerCase()) || campaignParams.has(name.toLowerCase()) || looksLikeSecret(value) || looksLikeSecret(name) || holdsUrlStructure(value)) continue;
+    if (!name || builtIn.has(name.toLowerCase()) || excludedNamePattern.test(name.toLowerCase()) || extra.has(name.toLowerCase()) || campaignParams.has(name.toLowerCase()) || looksLikeSecret(value) || looksLikeSecret(rawName) || holdsUrlStructure(value)) continue;
     kept.push(pair);
   }
   return kept.join('&');
@@ -78,7 +79,8 @@ const mixedId = (value: string): boolean => /^[A-Za-z0-9_-]+$/.test(value) && /\
   && (value.length >= 20 || (value.length >= 10 && (value.match(/\d/g) || []).length >= 3 && (value.match(/[A-Za-z]/g) || []).length >= 3));
 function identifierSegment(raw: string): boolean {
   const value = decode(raw);
-  return uuid.test(value) || /^[0-9a-f]{16,}$/i.test(value) || mixedId(value) || /^\d{6,}$/.test(value) || looksLikeSecret(raw);
+  // Token characters: `+`, `=`, `%`, `~` in a segment of 8 or more characters, or `.` too in one over 12 (base64 parts, signed values).
+  return uuid.test(value) || /^[0-9a-f]{16,}$/i.test(value) || mixedId(value) || (value.length >= 8 && /[+=%~]/.test(raw)) || (value.length > 12 && /[+=%~.]/.test(raw)) || /^\d{6,}$/.test(value) || looksLikeSecret(raw);
 }
 
 /** A path-like part (`/letters/abc123def456`): each identifier segment becomes `:id`; route words stay. */
@@ -98,14 +100,17 @@ function cleanSegments(path: string): string {
 export function cleanFragment(hash: string, extra: ReadonlySet<string>): string {
   const fragment = hash.replace(/^#/, '');
   if (!fragment || decodings(fragment).some(value => value.includes('://'))) return '';
-  if (!fragment.includes('=')) {
+  // Pairs have a `=` before a value; a `=` only at the end is base64 padding, not a pair.
+  if (!/=[^=]/.test(fragment)) {
+    // The whole fragment first: a secret can hold `/` (base64) and pass segment by segment.
+    if (looksLikeSecret(fragment)) return '';
     if (!fragment.includes('/')) return identifierSegment(fragment) ? '' : fragment;
     return cleanSegments(fragment);
   }
   const question = fragment.indexOf('?');
-  const route = question >= 0 && question < fragment.indexOf('=') ? fragment.slice(0, question) : '';
+  const route = question >= 0 && question < fragment.search(/=(?![=?]|$)/) ? fragment.slice(0, question) : '';
   const pairs = cleanPairs(route ? fragment.slice(question + 1) : fragment, extra);
-  const keptRoute = route ? cleanSegments(route) : '';
+  const keptRoute = route && !looksLikeSecret(route) ? cleanSegments(route) : '';
   return keptRoute && pairs ? `${keptRoute}?${pairs}` : keptRoute || pairs;
 }
 
