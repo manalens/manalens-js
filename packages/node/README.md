@@ -59,6 +59,18 @@ Server mode can set the protected traits `email`, `itch_user_id`,
 `stripe_customer_id` and `paddle_customer_id`. App mode drops them with one
 warning, because the collector drops them from app events.
 
+## Read the web SDK cookie
+
+To join a checkout or a sign-in to the browser's visitor, read the web SDK's anonymous ID cookie on your server. The name is a stable contract: `mana_<FNV-1a 32-bit hash of the publishable key>_anonymous-id`.
+
+```js
+import { sdkCookieName } from '@manalens/node';
+
+const anonymousId = req.cookies[sdkCookieName(publishableKey, 'anonymous-id')];
+```
+
+Sending `getAnonymousId()` from the page with the request is better when you can. See https://docs.manalens.dev/sdks/server#read-the-anonymous-id-from-the-cookie.
+
 ## Verify Steam ownership
 
 `link()` links the Steam account of a player with a Steam ticket. The game

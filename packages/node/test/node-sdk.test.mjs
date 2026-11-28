@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
-import { Manalens, SDK_VERSION, APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES, APP_DEVICES } from '../dist/esm/index.js';
+import { Manalens, sdkCookieName, SDK_VERSION, APP_PLATFORMS, APP_STOREFRONTS, APP_ENGINES, APP_DEVICES } from '../dist/esm/index.js';
 import { retryDelay, parseRetryAfter, isRetryableStatus, refusedEvents } from '../dist/esm/queue/index.js';
 import { isWellFormedKey, keyChecksum } from '../dist/esm/utils/keys.js';
 
@@ -632,4 +632,10 @@ test('link: shutdown() during the Retry-After wait stops the second try (node ha
   await closing;
   assert.deepEqual(await pending, { linked: false, status: 0, code: 'SHUT_DOWN' });
   assert.equal(calls.length, 1, 'no second request');
+});
+
+test('sdkCookieName: the web SDK cookie name, a stable contract (P-2886)', () => {
+  // The same name as the Manalens website's own snippet key gives in the collector repo (sdkCookieName there).
+  assert.equal(sdkCookieName('mana_pk_VK9kThkmTFzjf9VNY2cP8yklqimVKuycRRkuKuoaWZE001qHAtR', 'anonymous-id'), 'mana_42df990d_anonymous-id');
+  assert.equal(sdkCookieName('mana_pk_VK9kThkmTFzjf9VNY2cP8yklqimVKuycRRkuKuoaWZE001qHAtR', 'session-id'), 'mana_42df990d_session-id');
 });

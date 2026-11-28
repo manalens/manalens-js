@@ -160,6 +160,8 @@ for (const [attr, apex] of [[undefined, true], ['true', true], ['false', false]]
   vm.runInNewContext(code, { window, document, location: globalThis.location, navigator: globalThis.navigator, crypto: webcrypto, URL, setInterval: () => 1, clearInterval: () => {}, fetch: async () => ({ ok: true }) });
   const [cookie] = jar.find('mana_').filter(c => c.name.endsWith('_anonymous-id'));
   assert.equal(cookie.domain, apex ? 'snippet.com' : 'play.snippet.com'); assert.equal(cookie.hostOnly, !apex);
+  // P-2886: the name is a stable contract: mana_<FNV-1a 32-bit hash of the publishable key>_anonymous-id (sdkCookieName in @manalens/node).
+  assert.equal(cookie.name, 'mana_14af5d1c_anonymous-id');
   window.manalens.destroy();
 });
 
