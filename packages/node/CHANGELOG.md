@@ -1,5 +1,11 @@
 # @manalens/node
 
+## 0.4.0
+
+### Minor Changes
+
+- 1237179: `sdkCookieName(publishableKey, name)`: the name of a web SDK cookie (`mana_<FNV-1a hash>_anonymous-id`), so a server can read the browser's anonymous ID without copying the hash.
+
 ## 0.3.0
 
 ### Minor Changes
