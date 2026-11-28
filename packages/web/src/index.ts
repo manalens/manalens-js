@@ -1,7 +1,7 @@
-import { pageContext } from './attribution';
+import { pageContext, utcOffset } from './attribution';
 import { acquisitionKeys } from './attribution-contract';
 import { clearAnonymousId, clearSessionId, clearUserId, currentSessionId, generateAnonymousId, randomId, readOptOut, readSessionId, readUserId, touchSession, writeOptOut, writeUserId } from './identity';
-import { readLocal, removeLocal, storageKey, writeLocal } from './storage';
+import { isHttpPage, readLocal, removeLocal, storageKey, turnCookiesOffOnAppPage, writeLocal } from './storage';
 import { BREADCRUMBS, cleanFile, cleanMessage, ErrorLimiter, errorProperties, firstFrame, type ErrorInput, type TrackErrorOptions } from './errors';
 import { HANG_THRESHOLD_MS, HangWatchdog, hangPlace, MAX_HANG_THRESHOLD_MS, MIN_HANG_THRESHOLD_MS, type Hang } from './hang';
 import { CRASH_ALIVE_MS, CRASH_HEARTBEAT_MS, removeTab, takeCrashed, takeStillSilent, writeTab, type TabEntry } from './crash';
@@ -82,8 +82,6 @@ const POPSTATE_MAX_WAIT_MS = 1000;
  * the headers and for keepalive requests of other scripts.
  */
 const KEEPALIVE_MAX_BYTES = 60_000;
-/** `{"events":[` and `]}`: the bytes of a request body around the events. */
-const BODY_WRAPPER_BYTES = 13;
 /** The default timeout of shutdown(), as the game SDKs on quit: session_end, then send for at most 2 s. */
 const SHUTDOWN_TIMEOUT_MS = 2000;
 
@@ -137,6 +135,14 @@ export class Analytics {
   private readonly options: ResolvedOptions;
   /** The validated `app` option, sent as context.app on every event. */
   private readonly app?: AppInfo;
+  /**
+   * An installed-app page (not http or https: Electron `app://`, `file://`,
+   * Tauri, Capacitor) with a valid app option: events are app events
+   * (channel `app`, no context.page, no page views), and no cookies are used.
+   */
+  private readonly appChannel: boolean;
+  /** The warning of page() on an installed-app page is printed once per instance. */
+  private warnedAppPage = false;
   private pending: AnalyticsEvent[] = [];
   private timer?: ReturnType<typeof setInterval>;
   private previousPath?: string;
@@ -249,6 +255,12 @@ export class Analytics {
     const publishableKey = resolvePublishableKey(options);
     this.app = resolveAppInfo(options.app);
     this.logger = new Logger(options.logger);
+    // An installed-app page: the collector refuses its page URL, so the SDK sends
+    // app events there (the app option is needed for them).
+    const httpPage = isHttpPage();
+    this.appChannel = !httpPage && !!this.app;
+    if (this.appChannel) turnCookiesOffOnAppPage();
+    if (!httpPage && !this.app && typeof window !== 'undefined') console.warn(`Manalens: this page is not http or https (${location.protocol}). For an installed app (Electron app://, file://, Tauri, Capacitor), set a valid app option: the SDK then sends app events. Without it, the collector refuses the web events of this page.`);
     // Game mode and the persistent queue need the app context: game events
     // without context.app do not reach the game dashboards.
     if (options.game === true && !this.app) console.warn('Manalens: the game option needs a valid app option. Game mode is off.');
@@ -300,7 +312,8 @@ export class Analytics {
     if (this.identityAllowed() && !this.pageExcluded()) this.loadIdentity();
     // Record the landing page's acquisition touch before any navigation
     // (not from an excluded page, whose campaign would carry to later events).
-    if (!this.pageExcluded()) this.captureContext();
+    // App events have no page and no campaign.
+    if (!this.appChannel && !this.pageExcluded()) this.captureContext();
     this.timer = setInterval(() => { this.keepGameSessionAlive(); void this.flushDue(); }, this.options.flushIntervalMs);
     window.addEventListener('pagehide', this.onPageHide);
     document.addEventListener?.('visibilitychange', this.onVisibilityChange);
@@ -316,7 +329,8 @@ export class Analytics {
       this.startGame();
     }
     this.sendHandoff();
-    if (this.options.autoPageviews) {
+    // App events have no page views.
+    if (this.options.autoPageviews && !this.appChannel) {
       this.page();
       this.historyPathname = location.pathname;
       installHistoryHooksOnce();
@@ -324,7 +338,7 @@ export class Analytics {
       window.addEventListener('manalens:navigate', this.onNavigation);
       window.addEventListener(HISTORY_EVENT, this.onHistoryChange);
     }
-    this.logger.log('info', `Initialized (autoPageviews: ${this.options.autoPageviews}, consent required: ${this.options.requireConsent === true}, game: ${this.game}, persistQueue: ${!!this.persist})`);
+    this.logger.log('info', `Initialized (channel: ${this.appChannel ? 'app' : 'web'}, autoPageviews: ${this.options.autoPageviews && !this.appChannel}, consent required: ${this.options.requireConsent === true}, game: ${this.game}, persistQueue: ${!!this.persist})`);
   }
 
   /**
@@ -363,6 +377,13 @@ export class Analytics {
 
   page(properties: AnalyticsEvent['properties'] = {}): void {
     if (typeof window === 'undefined') return;
+    if (this.appChannel) {
+      if (!this.warnedAppPage) {
+        this.warnedAppPage = true;
+        console.warn('Manalens: page() sends nothing on an installed-app page: app events have no page views. Use track(), for example track(\'screen_view\', { screen: \'menu\' }).');
+      }
+      return;
+    }
     const path = `${location.pathname}${location.search}`;
     if (path === this.previousPath && Object.keys(properties).length === 0) return;
     // A page view sent now replaces one that waits (for example page() on a router's page-load event).
@@ -625,6 +646,27 @@ export class Analytics {
     return hostExcluded(location.hostname, tracking.excludeHosts) || pathExcluded(location.pathname, tracking.excludePaths);
   }
 
+  /**
+   * The context of a new event: the page, referrer and campaign of a web
+   * event, or only the locale and the UTC offset of an app event (no page
+   * URL, referrer or UTM fields: the collector refuses a page that is not on
+   * the project domain).
+   */
+  private eventContext(): AnalyticsEvent['context'] {
+    if (!this.appChannel) return this.captureContext();
+    const locale = typeof navigator !== 'undefined' ? navigator.language?.slice(0, 32) : undefined;
+    return { ...(locale ? { locale } : {}), ...utcOffset() };
+  }
+
+  /**
+   * The request body of a batch. App events add `sent_at` (the device clock
+   * now), so the collector corrects a device clock that is fast or slow, as
+   * for the game SDKs. Made at each send, so a retry has a new `sent_at`.
+   */
+  private requestBody(batch: AnalyticsEvent[]): string {
+    return JSON.stringify(this.appChannel ? { events: batch, sent_at: new Date().toISOString() } : { events: batch });
+  }
+
   /** Carry one coherent acquisition touch in memory for this page lifetime. */
   private captureContext(): AnalyticsEvent['context'] {
     const context = pageContext(location.href, this.options.tracking?.excludeQueryParams);
@@ -684,10 +726,10 @@ export class Analytics {
       type,
       ...(event ? { event } : {}),
       message_id: randomId(),
-      channel: 'web',
+      channel: this.appChannel ? 'app' : 'web',
       version: LIBRARY_VERSION,
       original_timestamp: originalTimestamp,
-      context: { ...(context ?? this.captureContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION, ...(this.app ? { app: this.app } : {}) },
+      context: { ...(context ?? this.eventContext()), library_name: LIBRARY_NAME, library_version: LIBRARY_VERSION, ...(this.app ? { app: this.app } : {}) },
       properties,
       ...(identity ?? {}),
       ...(type === 'identify' || type === 'traits' ? { traits } : {}),
@@ -1032,7 +1074,7 @@ export class Analytics {
     if (!this.active() || this.pending.length === 0) return;
     if (keepalive) return this.flushKeepalive();
     const batch = this.pending.splice(0, Math.min(this.options.batchSize, this.batchLimit));
-    const body = JSON.stringify({ events: batch });
+    const body = this.requestBody(batch);
     const result = await this.send(batch, body, false);
     if (!result) return;
     this.requeue(result.again);
@@ -1055,10 +1097,12 @@ export class Analytics {
   private async flushKeepalive(): Promise<void> {
     const sends: Promise<{ again: AnalyticsEvent[] } | undefined>[] = [];
     const limit = Math.min(this.options.batchSize, this.batchLimit);
+    // The bytes of a request body around the events (with `sent_at` for app events).
+    const wrapperBytes = utf8Bytes(this.requestBody([]));
     while (this.pending.length) {
       const budget = KEEPALIVE_MAX_BYTES - this.keepaliveInFlight;
       const batch: AnalyticsEvent[] = [];
-      let bytes = BODY_WRAPPER_BYTES;
+      let bytes = wrapperBytes;
       for (const event of this.pending) {
         if (batch.length >= limit) break;
         const next = bytes + this.size(event) + (batch.length ? 1 : 0);
@@ -1067,16 +1111,16 @@ export class Analytics {
       }
       if (!batch.length) {
         const head = this.pending[0];
-        if (BODY_WRAPPER_BYTES + this.size(head) <= KEEPALIVE_MAX_BYTES) break; // fits later, when the budget is free again
+        if (wrapperBytes + this.size(head) <= KEEPALIVE_MAX_BYTES) break; // fits later, when the budget is free again
         this.pending.shift();
         this.logger.log('warn', 'An event over the keepalive limit is sent alone without keepalive');
-        sends.push(this.send([head], JSON.stringify({ events: [head] }), false));
+        sends.push(this.send([head], this.requestBody([head]), false));
         continue;
       }
       // The exact body: its UTF-8 length decides (size() can count UTF-16 units where TextEncoder is missing).
-      let body = JSON.stringify({ events: batch });
+      let body = this.requestBody(batch);
       let reserved = utf8Bytes(body);
-      while (batch.length > 1 && reserved > budget) { batch.pop(); body = JSON.stringify({ events: batch }); reserved = utf8Bytes(body); }
+      while (batch.length > 1 && reserved > budget) { batch.pop(); body = this.requestBody(batch); reserved = utf8Bytes(body); }
       if (reserved > budget) break;
       this.pending.splice(0, batch.length);
       this.keepaliveInFlight += reserved;

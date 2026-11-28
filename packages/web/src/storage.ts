@@ -27,11 +27,33 @@ export function storageKey(publishableKey: string, name: string): string {
   return `${PREFIX}_${hashKey(publishableKey)}_${name}`;
 }
 
+/** The page is served over http or https (a website, or a web export on a host). */
+export function isHttpPage(): boolean {
+  return typeof location === 'undefined' || location.protocol === 'http:' || location.protocol === 'https:';
+}
+
+/**
+ * Installed-app pages (`app://`, `file://`, `capacitor://` ...) with the app
+ * option: cookies are not used at all. Browsers often refuse or drop cookies
+ * on a custom scheme, so identity goes to localStorage (then memory) there.
+ * An SDK instance with the app option turns it on; it never applies to an
+ * http or https page.
+ */
+let appPageCookiesOff = false;
+
+/** Use no cookies on this installed-app page. */
+export function turnCookiesOffOnAppPage(): void { appPageCookiesOff = true; }
+
+/** True when the SDK uses no cookies on this page. */
+export function cookiesAreOff(): boolean { return appPageCookiesOff && !isHttpPage(); }
+
 function readCookieJar(): string {
+  if (cookiesAreOff()) return '';
   try { return typeof document !== 'undefined' && typeof document.cookie === 'string' ? document.cookie : ''; } catch { return ''; }
 }
 
 function writeCookieJar(value: string): void {
+  if (cookiesAreOff()) return;
   try { if (typeof document !== 'undefined') document.cookie = value; } catch { /* Cookies blocked. */ }
 }
 
@@ -43,7 +65,7 @@ let apexCache: { host: string; domain: string | null } | undefined;
  * public-suffix hosts. Cached per hostname.
  */
 export function getApexDomain(): string | null {
-  if (typeof window === 'undefined' || typeof location === 'undefined') return null;
+  if (cookiesAreOff() || typeof window === 'undefined' || typeof location === 'undefined') return null;
   const host = location.hostname;
   if (apexCache?.host === host) return apexCache.domain;
   let domain: string | null = null;
@@ -114,6 +136,23 @@ export function writeLocal(key: string, value: string): void {
 
 export function removeLocal(key: string): void {
   try { localStore()?.removeItem(key); } catch { /* Storage unavailable. */ }
+}
+
+function sessionStore(): Storage | undefined {
+  try { return typeof window !== 'undefined' ? window.sessionStorage ?? undefined : undefined; } catch { return undefined; }
+}
+
+/** sessionStorage: the user ID on installed-app pages, where the SDK uses no cookies. */
+export function readSession(key: string): string | undefined {
+  try { const value = sessionStore()?.getItem(key); return typeof value === 'string' && value ? value : undefined; } catch { return undefined; }
+}
+
+export function writeSession(key: string, value: string): void {
+  try { sessionStore()?.setItem(key, value); } catch { /* Storage unavailable. */ }
+}
+
+export function removeSession(key: string): void {
+  try { sessionStore()?.removeItem(key); } catch { /* Storage unavailable. */ }
 }
 
 /** Test hook: forget the cached apex domain. */

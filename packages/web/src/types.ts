@@ -9,12 +9,19 @@ export interface AnalyticsEvent {
   type: 'page' | 'track' | 'identify' | 'traits';
   event?: string;
   message_id: string;
-  channel: 'web';
+  /**
+   * `web` on an http(s) page. `app` on an installed-app page (`app://`,
+   * `file://`, a Tauri or Capacitor scheme) with a valid `app` option: then
+   * the context has no page, referrer or campaign fields.
+   */
+  channel: 'web' | 'app';
   version: string;
   original_timestamp: string;
   context: Partial<Record<(typeof acquisitionKeys)[number], string>> & {
-    page: { path: string; title: string; url: string };
-    referrer: string;
+    /** Web events only (channel `web`). */
+    page?: { path: string; title: string; url: string };
+    /** Web events only (channel `web`). */
+    referrer?: string;
     utm_source?: string;
     utm_medium?: string;
     utm_campaign?: string;
@@ -76,6 +83,8 @@ export interface AnalyticsOptions {
    * each client-side navigation (history.pushState / replaceState when the
    * path changes, back and forward, and the `manalens:navigate` event). Set false
    * and call page() yourself, for example on a router's page-load event.
+   * App events (an installed-app page with the `app` option) have no page
+   * views: this option and page() send nothing there.
    */
   autoPageviews?: boolean;
   /** Events per request, default 30, from 1 to 50 (the collector takes at most 50). A full batch sends at once, except during a backoff wait after a failed send. */
@@ -124,9 +133,12 @@ export interface AnalyticsOptions {
   errorHandler?: (error: Error) => void;
   /**
    * App context for a browser or Electron game, sent as `context.app` on every
-   * event next to `context.page` (the channel stays `web`). It feeds the App
-   * filters and breakdowns (platform, storefront, version, build, engine). An
-   * invalid object is dropped with a console warning.
+   * event. On an http(s) page it goes next to `context.page` and the channel
+   * stays `web`. On an installed-app page (`app://`, `file://`, a Tauri or
+   * Capacitor scheme) the events are app events: channel `app`, no
+   * `context.page`, no page views, and `sent_at` in each request. It feeds
+   * the App filters and breakdowns (platform, storefront, version, build,
+   * engine). An invalid object is dropped with a console warning.
    */
   app?: AppInfo;
   /**

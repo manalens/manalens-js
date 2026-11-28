@@ -67,7 +67,7 @@ removes the `localStorage` copy. Every event carries `anonymous_id`.
 | --- | --- | --- | --- |
 | `anonymous-id` | cookie, else localStorage, else memory | 1 year, refreshed on each event | Persistent browser ID |
 | `session-id` | cookie, else localStorage, else memory | 30 minutes of inactivity, and at most 24 hours from the start of the session | `session_id` on each event |
-| `user-id` | cookie (browser session) | Until the browser closes or `reset()` | `user_id` set by `identify()` |
+| `user-id` | cookie (browser session); sessionStorage on an installed-app page | Until the browser or app closes, or `reset()` | `user_id` set by `identify()` |
 | `opt-out` | cookie and localStorage | 1 year | Set by `optOut()` |
 | `first-open` | localStorage, else memory | Until `optOut()` or `setConsent(false)` | Game mode only: the time of the first `game_open` |
 | `game-state` | localStorage | While a game session is open; removed on `pagehide`, `shutdown()`, `destroy()`, `reset()`, `optOut()` and `setConsent(false)` | Game mode only: one entry per open tab (session ID, last write time, focus, build, version), for `game_crash` |
@@ -82,6 +82,12 @@ apex domain (and are sent in the `Cookie` header to every subdomain's servers),
 so use `crossSubdomainCookies: false` if you host untrusted content on a
 subdomain. An existing host-only cookie on the current host (for example from
 SDK 0.1 or from `crossSubdomainCookies: false`) migrates to the apex domain.
+
+On an installed-app page (`app://`, `file://`, Tauri, Capacitor) with the
+`app` option, the SDK uses no cookies: browsers often refuse them on a custom
+scheme. `anonymous-id` and `session-id` go to `localStorage` (else memory),
+and `user-id` to `sessionStorage`. See
+[Installed-app pages](#installed-app-pages-electron-tauri-capacitor).
 
 By default identity is always on, like Formo. There is no remote
 `attribution_enabled` check. To stop collection, pass `disabled: true` (the SDK
@@ -311,7 +317,11 @@ Each event in `POST /v0/events` (`{ events: [...] }`) has `type` (`page`,
 `channel: 'web'`, `version`, `original_timestamp`, `context`, `properties`,
 `anonymous_id`, `session_id`, `user_id` (after `identify()`), and `traits`
 (identify and traits only). In consent mode before consent, `anonymous_id`, `session_id`
-and `user_id` are absent.
+and `user_id` are absent. On an installed-app page with the `app` option, the
+events are app events: `channel: 'app'`, no `page` type, a `context` without
+`page`, `referrer` or campaign fields, and the body is
+`{ events: [...], sent_at }` (see
+[Installed-app pages](#installed-app-pages-electron-tauri-capacitor)).
 
 The API prefix is `/v0`. SDK builds before this change posted to `/v1/events`,
 which the Manalens API no longer serves; use a build that posts to
@@ -433,10 +443,14 @@ turns identity off for that instance.
 ## Browser and Electron games
 
 A game that runs in a browser or in Electron (three.js, Phaser, PixiJS,
-Babylon) can set the `app` option. Every event then carries `context.app` next
-to `context.page`, and the channel stays `web`. The App filters and breakdowns
-(platform, storefront, version, build, engine) and "errors by build" read it.
-Device, OS and browser still come from the browser user agent.
+Babylon) can set the `app` option. On an `http` or `https` page, every event
+then carries `context.app` next to `context.page`, and the channel stays
+`web`. On an installed-app page (Electron `app://` or `file://`, Tauri,
+Capacitor), the events are app events; see
+[Installed-app pages](#installed-app-pages-electron-tauri-capacitor). The App
+filters and breakdowns (platform, storefront, version, build, engine) and
+"errors by build" read it. Device, OS and browser still come from the browser
+user agent.
 
 ```ts
 const analytics = createAnalytics({
@@ -466,6 +480,46 @@ With `game: true` the SDK sends `game_open`, `session_start`, `session_end`,
 `error` and `game_crash` for you; see [Game mode](#game-mode). For the other
 standard game events (`game_updated`), see the analytics docs
 `docs/sdks/app-events.mdx`, section "Browser and Electron games".
+
+### Installed-app pages (Electron, Tauri, Capacitor)
+
+Electron with `app://` (or `file://`) now works directly in the renderer, and
+so do Tauri, Capacitor and other custom schemes. When the page is not `http`
+or `https` and the `app` option is valid, the SDK sends **app events**, as the
+Godot, Unity and Unreal SDKs do:
+
+- `channel: 'app'` and `context.app` on every event. The context has no
+  `page`, `referrer` or UTM and click ID fields: the collector refuses a page
+  URL that is not on the project domain. It has `locale` and `utc_offset`.
+- No page views. `autoPageviews` does nothing, and `page()` sends nothing
+  (one `console.warn` the first time). Use `track()`, for example
+  `track('screen_view', { screen: 'menu' })`.
+- Each request has `sent_at` (the device clock when it is sent). The collector
+  then corrects a device clock that is fast or slow.
+- No cookies: identity is in `localStorage` (see [Browser storage](#browser-storage)).
+- Game mode works the same: `game_open`, `session_start`, `session_end`,
+  `error` with breadcrumbs, `game_hang` and `game_crash`.
+
+Set `app` with the right `platform` and `storefront`. For a Steam build on
+Windows:
+
+```ts
+const analytics = createAnalytics({
+  publishableKey: 'YOUR_PUBLISHABLE_KEY',
+  endpoint: 'https://events.manalens.dev',
+  app: { platform: 'windows', storefront: 'steam', app_version: '1.4.0', build: '571', engine: 'other' },
+  game: true,
+});
+```
+
+Use `macos` or `linux` for those builds (in Electron, map
+`process.platform` from the preload: `win32` to `windows`, `darwin` to
+`macos`). The collector accepts an `Origin` with an installed-app scheme.
+
+Without a valid `app` option on such a page, the SDK sends web events as on
+any page and writes one `console.warn`: the collector refuses those events,
+because the page host is not on the project domain. `http` and `https` pages
+(a website, a web export on your domain or a game portal) do not change.
 
 ### Game mode
 

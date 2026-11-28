@@ -2725,3 +2725,220 @@ test('shutdown(): without game mode it only sends the queue (several batches), a
   await window.manalens.shutdown();
   assert.deepEqual(eventsOf(snippetSent).map(event => event.event), ['from_snippet']);
 });
+
+// Installed-app pages (Electron app://, file://, Tauri, Capacitor): with the app
+// option the SDK sends app events. The collector refuses a page URL that is not on
+// the project domain, and accepts an app event (channel app, context.app, no page).
+const electronApp = { platform: 'windows', storefront: 'steam', app_version: '1.4.0', build: '571', engine: 'other' };
+const isoTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+
+test('app:// page with the app option: app events (channel app, context.app, no context.page) and sent_at in the body', async t => {
+  const { window, jar, local } = browser('app://game/index.html?utm_source=Newsletter&email=private%40example.com');
+  const session = memoryStorage();
+  Object.defineProperty(window, 'sessionStorage', { configurable: true, value: session });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const warn = t.mock.method(console, 'warn', () => {});
+  const sdk = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: electronApp });
+  try {
+    sdk.track('level_start', { level: 3 });
+    await sdk.identify('player-1', { plan: 'free' });
+    sdk.traits({ difficulty: 'hard' });
+    await sdk.flush();
+    const events = eventsOf(sent);
+    // autoPageviews is on by default, but app events have no page views.
+    assert.deepEqual(events.map(event => event.type), ['track', 'identify', 'traits']);
+    for (const event of events) {
+      assert.equal(event.channel, 'app');
+      assert.deepEqual(event.context.app, electronApp);
+      assert.equal(event.context.page, undefined);
+      assert.equal(event.context.referrer, undefined);
+      assert.equal(event.context.utm_source, undefined);
+      assert.deepEqual(Object.keys(event.context).sort(), ['app', 'library_name', 'library_version', 'locale', 'utc_offset']);
+      assert.equal(event.context.locale, 'en-US');
+      assert.equal(event.context.library_name, 'Manalens Web SDK');
+      assert.match(event.anonymous_id, uuid);
+      assert.match(event.session_id, uuid);
+      assert.notEqual(event.session_id, event.anonymous_id);
+    }
+    assert.equal(events[0].anonymous_id, events[2].anonymous_id);
+    for (const item of sent) {
+      assert.deepEqual(Object.keys(item.body), ['events', 'sent_at']);
+      assert.match(item.body.sent_at, isoTime);
+    }
+    assert.ok(!JSON.stringify(sent).includes('private'));
+    // No cookies on a custom scheme: identity is in localStorage, the user ID in sessionStorage.
+    assert.equal(jar.writes.length, 0, 'no cookie is read or written');
+    const anonymousKey = [...local.stored.keys()].find(key => key.endsWith('_anonymous-id'));
+    assert.equal(local.stored.get(anonymousKey), events[0].anonymous_id);
+    assert.ok([...local.stored.keys()].some(key => key.endsWith('_session-id')));
+    assert.equal([...session.stored.entries()].find(([key]) => key.endsWith('_user-id'))?.[1], 'player-1');
+    // The next load (a new instance) keeps the anonymous ID, the session and the user ID.
+    sdk.destroy(); sent.length = 0;
+    const again = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: electronApp });
+    again.track('menu_open');
+    await again.flush();
+    const [next] = eventsOf(sent);
+    assert.equal(next.anonymous_id, events[0].anonymous_id);
+    assert.equal(next.session_id, events[0].session_id);
+    assert.equal(next.user_id, 'player-1');
+    // reset() clears the user ID from sessionStorage.
+    again.reset();
+    assert.equal([...session.stored.keys()].find(key => key.endsWith('_user-id')), undefined);
+    again.destroy();
+    assert.equal(warn.mock.callCount(), 0, 'no warning with a valid app option');
+  } finally { sdk.destroy(); }
+});
+
+test('app:// page: page() sends nothing and warns once; history changes send no page views', async t => {
+  browser('app://game/index.html');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const warn = t.mock.method(console, 'warn', () => {});
+  const pushState = t.mock.fn();
+  globalThis.history = { state: null, pushState, replaceState: t.mock.fn() };
+  const sdk = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: electronApp });
+  try {
+    sdk.page();
+    sdk.page({ screen: 'menu' });
+    globalThis.window.dispatchEvent(new Event('popstate'));
+    globalThis.window.dispatchEvent(new Event('manalens:navigate'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    sdk.track('screen_view', { screen: 'menu' });
+    await sdk.flush();
+    assert.deepEqual(eventsOf(sent).map(event => event.type), ['track']);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(warn.mock.calls[0].arguments[0], /page\(\) sends nothing on an installed-app page/);
+    assert.equal(globalThis.history.pushState, pushState, 'history is not wrapped');
+  } finally { sdk.destroy(); delete globalThis.history; }
+});
+
+test('file:// page with the app option: app events too, also in the pagehide keepalive send', async t => {
+  const { jar } = browser('file:///C:/Games/A%20Short%20Sail/resources/app/index.html');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const sdk = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: electronApp });
+  try {
+    sdk.track('game_started');
+    // The pagehide send (keepalive) has sent_at too.
+    globalThis.window.dispatchEvent(new Event('pagehide'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const [event] = eventsOf(sent);
+    assert.equal(event.channel, 'app');
+    assert.equal(event.context.page, undefined);
+    assert.ok(!JSON.stringify(sent).includes('Games'), 'no file path is sent');
+    assert.match(sent[0].body.sent_at, isoTime);
+    assert.equal(jar.writes.length, 0);
+  } finally { sdk.destroy(); }
+});
+
+test('app:// page, game mode: session_start, game_open, error with breadcrumbs, session_end and shutdown() as app events', async t => {
+  const local = memoryStorage();
+  browser('app://game/index.html', { local });
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const warn = t.mock.method(console, 'warn', () => {});
+  const sdk = new Analytics(gameOptions({ app: electronApp, autoPageviews: true, persistQueue: false }));
+  try {
+    sdk.track('level_start', { level: 1 });
+    globalThis.window.dispatchEvent(windowError({ message: 'boom', error: new Error('boom') }));
+    sdk.trackError('save failed');
+    await sdk.flush();
+    const events = eventsOf(sent);
+    assert.deepEqual(tracked(events), ['session_start', 'game_open', 'level_start', 'error', 'error']);
+    assert.ok(events.every(event => event.channel === 'app' && event.context.page === undefined));
+    assert.ok(events.every(event => event.session_id === events[0].session_id));
+    assert.equal(events[1].properties.is_first_open, true);
+    assert.equal(events[3].properties.source, 'auto');
+    assert.equal(events[3].properties.breadcrumbs, 'session_start,game_open,level_start');
+    assert.equal(events[4].properties.source, 'manual');
+    assert.match(sent[0].body.sent_at, isoTime);
+    // shutdown(): session_end, sent with sent_at, as an app event.
+    await sdk.shutdown();
+    const [end] = named(eventsOf(sent), 'session_end');
+    assert.equal(end.channel, 'app');
+    assert.equal(end.session_id, events[0].session_id);
+    assert.equal(typeof end.properties.duration_s, 'number');
+    assert.ok(sent.every(item => isoTime.test(item.body.sent_at)));
+    assert.equal(warn.mock.callCount(), 0);
+    // The first open is in localStorage: the next start is not a first open.
+    sent.length = 0;
+    const again = new Analytics(gameOptions({ app: electronApp, persistQueue: false }));
+    await again.flush();
+    assert.equal(named(eventsOf(sent), 'game_open')[0].properties.is_first_open, false);
+    assert.equal(named(eventsOf(sent), 'game_open')[0].channel, 'app');
+    again.destroy();
+  } finally { sdk.destroy(); }
+});
+
+test('app:// page, game mode: game_crash at the next load and game_hang go as app events', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-01-01T10:00:00Z').getTime() });
+  const local = memoryStorage();
+  const { document } = browser('app://game/index.html', { local });
+  document.visibilityState = 'visible'; document.hasFocus = () => true;
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const first = new Analytics(gameOptions({ app: electronApp, persistQueue: false, hangThresholdMs: 0 }));
+  await first.flush();
+  const [open] = named(eventsOf(sent), 'game_open');
+  assert.equal(Object.values(gameState(local)).length, 1, 'the session state is in localStorage');
+  // The app is killed: no pagehide, no shutdown().
+  t.mock.timers.tick(60_000);
+  crash(first, local);
+  sent.length = 0;
+  const second = new Analytics(gameOptions({ app: electronApp, persistQueue: false, hangThresholdMs: 0 }));
+  try {
+    await second.flush();
+    assert.deepEqual(tracked(eventsOf(sent)), ['game_crash', 'session_start', 'game_open']);
+    const [gameCrash] = eventsOf(sent);
+    assert.equal(gameCrash.channel, 'app');
+    assert.equal(gameCrash.context.page, undefined);
+    assert.equal(gameCrash.session_id, open.session_id);
+    assert.equal(gameCrash.properties.previous_build, '571');
+    // A hang: the same error event as on an http page, as an app event.
+    second.recordHang({ durationMs: 6200, scripts: [] });
+    await second.flush();
+    const [hang] = hangs(eventsOf(sent));
+    assert.equal(hang.channel, 'app');
+    assert.equal(hang.properties.hang_duration_s, 6.2);
+  } finally { second.destroy(); }
+});
+
+test('a page that is not http or https without a valid app option: one warning, and the events are sent as before', async t => {
+  browser('app://game/index.html');
+  const sent = []; t.mock.method(globalThis, 'fetch', collector(sent));
+  const warn = t.mock.method(console, 'warn', () => {});
+  const sdk = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000 });
+  try {
+    sdk.track('level_start');
+    await sdk.flush();
+    assert.equal(warn.mock.callCount(), 1);
+    assert.match(warn.mock.calls[0].arguments[0], /not http or https \(app:\).*set a valid app option/);
+    const events = eventsOf(sent);
+    assert.deepEqual(events.map(event => event.type), ['page', 'track']);
+    assert.ok(events.every(event => event.channel === 'web' && event.context.page));
+    assert.deepEqual(Object.keys(sent[0].body), ['events']);
+  } finally { sdk.destroy(); }
+  // An invalid app object: the app warning and the page warning.
+  const invalidWarn = t.mock.method(console, 'warn', () => {});
+  const invalid = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, autoPageviews: false, app: { platform: 'nintendo' } });
+  try {
+    assert.equal(invalidWarn.mock.callCount(), 2);
+    assert.match(invalidWarn.mock.calls[0].arguments[0], /app option is ignored/);
+    assert.match(invalidWarn.mock.calls[1].arguments[0], /not http or https/);
+  } finally { invalid.destroy(); }
+});
+
+test('http and https pages are unchanged after an app page: channel web, context.page, page views, cookies, no sent_at', async t => {
+  for (const url of ['https://game.example/play', 'http://localhost:5173/play']) {
+    const { jar } = browser(url);
+    const sent = []; const fetchMock = t.mock.method(globalThis, 'fetch', collector(sent));
+    const warn = t.mock.method(console, 'warn', () => {});
+    const sdk = new Analytics({ publishableKey: 'mana_pk_desktop', endpoint: 'https://collector.example', flushIntervalMs: 60000, app: electronApp });
+    try {
+      sdk.track('level_start');
+      await sdk.flush();
+      const events = eventsOf(sent);
+      assert.deepEqual(events.map(event => event.type), ['page', 'track']);
+      assert.ok(events.every(event => event.channel === 'web' && event.context.page.path === '/play'));
+      assert.deepEqual(Object.keys(sent[0].body), ['events']);
+      assert.ok(jar.find('mana_').some(cookie => cookie.name.endsWith('_anonymous-id')), 'the anonymous ID is in a cookie');
+      assert.equal(warn.mock.callCount(), 0);
+    } finally { sdk.destroy(); warn.mock.restore(); fetchMock.mock.restore(); }
+  }
+});

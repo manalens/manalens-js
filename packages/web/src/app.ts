@@ -1,8 +1,11 @@
 /**
  * Optional app context for browser and Electron games (P-2516). When the
- * `app` option is set, every event carries `context.app` next to
- * `context.page`; the channel stays `web`. The App filters and breakdowns
- * (platform, storefront, version, build, engine) and "errors by build" read it.
+ * `app` option is set, every event carries `context.app`. On an http(s) page
+ * it goes next to `context.page` and the channel stays `web`. On an
+ * installed-app page (`app://`, `file://`, Tauri, Capacitor) the events are
+ * app events: channel `app` and no `context.page`. The App filters and
+ * breakdowns (platform, storefront, version, build, engine) and "errors by
+ * build" read it.
  *
  * The enums and limits mirror the collector (manalens
  * packages/shared/src/app-context.ts and appInfoSchema). An invalid object

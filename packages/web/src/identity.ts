@@ -1,6 +1,6 @@
 // Persistent first-party identity, adapted from getformo/sdk's
 // src/event/utils.ts (generateAnonymousId / clearAnonymousId).
-import { getCookie, identityCookieDomain, readLocal, removeCookie, removeLocal, setCookie, writeLocal } from './storage';
+import { cookiesAreOff, getCookie, identityCookieDomain, readLocal, readSession, removeCookie, removeLocal, removeSession, setCookie, writeLocal, writeSession } from './storage';
 
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
 /** A session ends after 30 minutes without an event. */
@@ -120,18 +120,26 @@ export function currentSessionId(key: string, crossSubdomain: boolean, now = Dat
 
 export const clearSessionId = clearAnonymousId;
 
-/** Like Formo's `user-id` key: a browser-session cookie, cleared by reset(). */
+/**
+ * Like Formo's `user-id` key: a browser-session cookie, cleared by reset().
+ * On an installed-app page (no cookies) it is kept in sessionStorage, which
+ * also lasts until the app or the window closes.
+ */
 export function readUserId(key: string): string | undefined {
-  const value = getCookie(key);
+  const value = cookiesAreOff() ? readSession(key) : getCookie(key);
   return value && value.length <= 255 ? value : undefined;
 }
 
 export function writeUserId(key: string, userId: string, crossSubdomain: boolean): void {
+  if (cookiesAreOff()) { writeSession(key, userId); return; }
   const domain = identityCookieDomain(crossSubdomain);
   setCookie(key, userId, domain ? { domain } : {});
 }
 
-export function clearUserId(key: string): void { removeCookie(key); }
+export function clearUserId(key: string): void {
+  removeCookie(key);
+  if (cookiesAreOff()) removeSession(key);
+}
 
 /** Persistent opt-out flag: one-year cookie plus a localStorage copy. */
 export function readOptOut(key: string): boolean {
