@@ -1,5 +1,11 @@
 # @manalens/web
 
+## 0.9.0
+
+### Minor Changes
+
+- 13b7e0a: `app.device`: send `steam_deck` on a Steam Deck (also `data-app-device`). Reports show it as Device `steam_deck`; `app.platform` stays the OS.
+
 ## 0.8.0
 
 ### Minor Changes

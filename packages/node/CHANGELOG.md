@@ -1,5 +1,11 @@
 # @manalens/node
 
+## 0.3.0
+
+### Minor Changes
+
+- 13b7e0a: `app.device`: app mode sends `steam_deck` when the environment variable `SteamDeck` is `1` (Steam sets it on a Steam Deck). Server mode accepts `context.device` `steam_deck`.
+
 ## 0.2.1
 
 ### Patch Changes
