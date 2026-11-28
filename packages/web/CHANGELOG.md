@@ -1,5 +1,12 @@
 # @manalens/web
 
+## 0.6.0
+
+### Minor Changes
+
+- e14fe67: Game mode: `game_crash` at the next load when a focused tab of the game closed without `pagehide` (for example out of memory), with `previous_session_id`, `previous_build` and `previous_app_version`. A normal close, reload or navigation is never a crash. Errors carry `breadcrumbs`: the names of the last 20 `track` events, cut to 1024 characters, as in the game SDKs. `reset()`, `setConsent(false)` and `optOut()` clear them.
+- e14fe67: Game mode: hang detection. A main thread blocked for at least `hangThresholdMs` (default 5000, `0` turns it off) sends an `error` with `error_type` `game_hang` and `hang_duration_s` (seconds, one decimal) when it runs again (long-animation-frame or longtask entries where the browser has them, else a timer). Never while the page is hidden or just visible again. A `game_crash` after a hang has the hang's `message_id` in `hang_message_id`.
+
 ## 0.5.1
 
 ### Patch Changes
